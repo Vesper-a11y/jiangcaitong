@@ -1,0 +1,63 @@
+name: PR check
+
+# 外部 PR 的自动体检。🔴 刻意用 pull_request 事件：
+# fork 来的 PR 拿不到 secrets，且这里绝不碰 GITEE_TOKEN，杜绝偷令牌。
+# 检查三件事：测试全绿 / 无隐私字面值 / 关键文件改动打醒目提示。
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'screenshots/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        # 🔴 npm ci 按 lockfile 装、--ignore-scripts 不跑安装脚本：
+        # 防止 PR 改 package.json 塞恶意依赖，在安装阶段执行任意代码。
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Syntax check
+        run: |
+          node --check web/app.js
+          node --check web/native.js
+          node --check web/jxufe_native.js
+
+      - name: Tests
+        run: npm test
+
+      - name: Privacy scan
+        run: |
+          set -e
+          # 只扫确定的真实身份值。手机号正则会误报示例值/时间戳，故不扫。
+          # 姓名/真学号一旦出现就是泄露；示例值 2202500000 / 13800000000 是允许的。
+          PAT='2202500000|张三|李四'
+          if git grep -n -E "$PAT" -- .; then
+            echo "::error::发现真实身份信息（姓名/学号）。请换成示例值 2202500000。"
+            exit 1
+          fi
+          echo "OK: 未发现隐私字面值"
+
+      - name: Sensitive files changed
+        run: |
+          git fetch origin main --depth=1 >/dev/null 2>&1 || true
+          CHANGED=$(git diff --name-only origin/main...HEAD 2>/dev/null || true)
+          echo "Changed files:"; echo "$CHANGED"
+          if echo "$CHANGED" | grep -qE '(^|/)(version\.json|\.github/workflows/|app\.js$)'; then
+            echo "::warning::本 PR 改了 version.json / app.js / workflow —— 涉及更新地址或自动同步令牌，必须人工逐行审查后再合并。"
+          fi
