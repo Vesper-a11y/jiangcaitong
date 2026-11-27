@@ -1,0 +1,20 @@
+# 这些文件改动会自动请求维护者 review。
+# 🔴 单 owner 是个人项目的现实情况：主要作用是「改这些文件时一定有人被点名看」，
+#    真正的强制要靠 GitHub 网页开 branch protection（见交接包）。
+
+# 更新清单与更新地址 —— 劫持风险最高
+/version.json                       @Vesper-a11y
+/github-release/                    @Vesper-a11y
+/gitee-release/                     @Vesper-a11y
+
+# 自动同步工作流 —— 含 GITEE_TOKEN
+/.github/workflows/                 @Vesper-a11y
+/.github/CODEOWNERS                 @Vesper-a11y
+
+# 前端主逻辑（含 UPDATE_* 常量、关于弹层、电费链路）
+/web/app.js                         @Vesper-a11y
+/web/native.js                      @Vesper-a11y
+/web/jxufe_native.js                @Vesper-a11y
+
+# 打包版本源头
+/android/build_apk.py               @Vesper-a11y
