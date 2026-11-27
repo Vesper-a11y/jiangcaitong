@@ -1,0 +1,39 @@
+name: Sync to Gitee
+
+# GitHub 每次 push 到 main，自动把源码镜像到 Gitee。
+# 只在 GitHub 侧配置一个 Secret：GITEE_TOKEN（Gitee 私人令牌，需勾 projects 权限）。
+# 注意：只同步源码分支，Release 附件（APK / version.json）不会自动同步，仍需分别上传。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mirror to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          set -e
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::warning::GITEE_TOKEN 未配置，本次跳过同步。请在 GitHub 仓库 Settings → Secrets and variables → Actions 新建 Secret: GITEE_TOKEN"
+            exit 0
+          fi
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # 令牌当 HTTPS 密码用；URI 编码，避免特殊字符破坏 URL
+          TOKEN=$(python3 -c 'import urllib.parse,os;print(urllib.parse.quote(os.environ["GITEE_TOKEN"],safe=""))')
+          git remote add gitee "https://vesper-a11y:${TOKEN}@gitee.com/vesper-a11y/jiangcaitong.git"
+          # 两边历史不同（Gitee 有初始化提交），用 force 覆盖
+          # 同时维护 main 和 master：App 的 Gitee 备援读 raw/master/version.json
+          git push --force gitee HEAD:refs/heads/main
+          git push --force gitee HEAD:refs/heads/master
+          echo "Synced to Gitee main + master"
