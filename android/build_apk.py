@@ -91,8 +91,8 @@ CNB_APK_NAME = "酱菜通.apk"
 # 🔴 2026-11-23 起，版本号**只在这里写一次**。
 #    以前还要手工同步 web/app.js 的两行和 MainActivity 的 UA，漏一处就打不出包。
 #    现在 sync_version() 会在打包前把这两处按这里的值重写（见那个函数的注释）。
-VERSION_NAME = "1.0.1"
-VERSION_CODE = 2
+VERSION_NAME = "1.0.2"
+VERSION_CODE = 3
 PKG = "com.jxufe.jiangcaitong"
 
 # 2026-11-01：`--debug` 让 APK 带 debuggable=true（aapt2 的 --debug-mode）。
