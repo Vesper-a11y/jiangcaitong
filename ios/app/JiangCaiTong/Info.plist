@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>酱菜通</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<!-- 空白启动屏：不加这条，iOS 会按 iPhone 6 的尺寸渲染整页，
+	     刘海两侧和底部会留黑边。 -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string></string>
+	</dict>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+	<!-- 🔴 教务系统是 http://jwglxt.zua.edu.cn，不是 https。
+	     不放开 ATS，所有教务请求会被系统直接掐掉，表现是「一行数据都没有」，
+	     而且**不会报错** —— 这是最容易查半天的那种故障。 -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<!-- 更新页和关于页要从 hobson.cc 取，走 https，上面那条已经覆盖。 -->
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<!-- 「加进日历」那一项。用系统的新建事件界面，用户看一眼点保存才真写进去，
+	     所以只要读+写的日历权限，不需要别的。 -->
+	<key>NSCalendarsUsageDescription</key>
+	<string>把考试安排加进你的日历，时间地点都填好，你看过再保存。</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>把考试安排加进你的日历，时间地点都填好，你看过再保存。</string>
+</dict>
+</plist>
