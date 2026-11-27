@@ -1,0 +1,117 @@
+// 酱菜通 · iOS 可行性探测（Scriptable）
+//
+// 怎么用：
+//   1. App Store 搜 "Scriptable"（免费，作者 Simon Støvring，别装错）
+//   2. 打开它，点右上角 ＋
+//   3. 把本文件全部内容粘进去，左上角 Done 保存
+//   4. 点这个脚本运行
+//
+// 跑完会自动弹一页结果。把那一页截图发回来，就能判断这条路通不通。
+//
+// 为什么只探这四件事 —— 它们正好是绕不过去的四道关：
+//   网络：要能带着自己的请求头去访问学校系统，且不受浏览器跨域限制
+//   文件：登录状态存在本机，下次打开不用重输
+//   加密：统一认证的密码是加密后提交的，得看这台机器给不给 AES
+//   通知：作业快截止要能提醒
+//   （网页视图顺带验了，它是现有界面能不能搬过来的前提）
+
+const HOST = "https://www.upstream.edu.cn/";
+
+const rows = [];
+
+function add(name, ok, detail) {
+  rows.push({ name: name, ok: ok, detail: String(detail) });
+}
+
+async function main() {
+  // ① 网络：这是整个方案的地基。浏览器里发不出去的请求，这里能发。
+  try {
+    const r = new Request(HOST);
+    r.method = "GET";
+    r.timeoutInterval = 20;
+    r.headers = { "User-Agent": "JiangCaiTong/0.45.1" };
+    const body = await r.loadString();
+    add("网络请求", "通", "状态 " + r.response.statusCode + " · " + body.length + " 字节");
+  } catch (e) {
+    add("网络请求", "不通", e.message || e);
+  }
+
+  // ② 文件：登录态得留得住，否则每次打开都要重新登录
+  try {
+    const fm = FileManager.local();
+    const p = fm.joinPath(fm.documentsDirectory(), "hyt-probe.txt");
+    fm.writeString(p, "probe " + Date.now());
+    const back = fm.readString(p);
+    add("文件读写", "通", "写入后读回 " + back.length + " 字节");
+  } catch (e) {
+    add("文件读写", "不通", e.message || e);
+  }
+
+  // ③ 加密：学校统一认证的密码不是明文提交的。
+  //    如果这里没有现成的 AES，还有一条退路 —— 把纯 JS 的实现内联进来，
+  //    但这会让脚本大几万行，能不用就不用，所以先看有没有。
+  try {
+    const found = [];
+    if (typeof Crypto !== "undefined") {
+      if (typeof Crypto.encrypt === "function") found.push("encrypt");
+      if (typeof Crypto.decrypt === "function") found.push("decrypt");
+      if (typeof Crypto.hash === "function") found.push("hash");
+      const alg = Crypto.EncryptionAlgorithm;
+      if (alg) {
+        Object.keys(alg).forEach(function (k) { found.push("算法 " + k); });
+      }
+    }
+    add("加密能力", found.length ? "有" : "缺", found.join("、") || "没看到 encrypt");
+  } catch (e) {
+    add("加密能力", "异常", e.message || e);
+  }
+
+  // ④ 通知：本地通知，不需要服务器
+  try {
+    const n = new Notification();
+    n.title = "酱菜通";
+    n.body = "通知能用";
+    await n.schedule();
+    add("本地通知", "通", "已排一条，几秒后会响");
+  } catch (e) {
+    add("本地通知", "不通", e.message || e);
+  }
+
+  // ⑤ 网页视图：现有那套页面能不能原样塞进来
+  let wv;
+  try {
+    wv = new WebView();
+    await wv.loadHTML(page());
+    add("网页视图", "通", "下面这一页就是它渲染出来的");
+  } catch (e) {
+    add("网页视图", "不通", e.message || e);
+    return;
+  }
+  await wv.present();
+}
+
+function page() {
+  let tr = "";
+  rows.forEach(function (r) {
+    const color = (r.ok === "通" || r.ok === "有") ? "#1D9E75"
+                : (r.ok === "缺" || r.ok === "异常") ? "#BA7517"
+                : "#A32D2D";
+    tr += "<tr><td>" + r.name + "</td>" +
+          "<td style='color:" + color + ";font-weight:600'>" + r.ok + "</td>" +
+          "<td style='color:#666'>" + r.detail + "</td></tr>";
+  });
+  return "<!doctype html><html><head><meta charset='utf-8'>" +
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>" +
+    "<style>body{font-family:-apple-system,sans-serif;margin:0;padding:20px;background:#fff;color:#111}" +
+    "h1{font-size:18px;margin:0 0 4px;font-weight:600}" +
+    "p{font-size:13px;color:#888;margin:0 0 18px}" +
+    "table{border-collapse:collapse;width:100%;font-size:14px}" +
+    "td{padding:11px 6px;border-bottom:1px solid #eee;vertical-align:top}" +
+    "td:first-child{width:78px;color:#333}" +
+    "td:last-child{font-size:12px;word-break:break-all}</style></head><body>" +
+    "<h1>酱菜通 · iOS 探测</h1>" +
+    "<p>把这一页截图发回来就行</p>" +
+    "<table>" + tr + "</table></body></html>";
+}
+
+await main();

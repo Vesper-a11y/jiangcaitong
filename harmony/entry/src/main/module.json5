@@ -1,0 +1,53 @@
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": ["phone", "tablet"],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:app_icon",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:app_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        "skills": [
+          {
+            "entities": ["entity.system.home"],
+            "actions": ["action.system.home"]
+          }
+        ]
+      }
+    ],
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.INTERNET"
+      }
+    ],
+    // 🔴 明文 HTTP 放行（2026-11-14 用户报「所有账号都登不上」之后加的）。
+    //    教务是 http://jwglxt.upstream.edu.cn，不是 https。鸿蒙默认只放 https，
+    //    而 INTERNET 权限只管「能不能联网」，管不了「能不能走明文」——
+    //    两者是两回事，只加权限的请求会被**拦在发出去之前**，报错还看不出原因。
+    //    文件在 resources/base/profile/network_config.json。
+    //    metadata 的名字各家文档写法不一（network_security_config /
+    //    ohos.network_config 都见过），两条都写上：认哪条算哪条，
+    //    写错的这条不会被当成错，只是不生效。
+    "metadata": [
+      {
+        "name": "network_security_config",
+        "resource": "$profile:network_config"
+      },
+      {
+        "name": "ohos.network_config",
+        "resource": "$profile:network_config"
+      }
+    ]
+  }
+}

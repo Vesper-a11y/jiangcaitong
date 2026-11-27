@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 和 web/app.css 里的 bg / card 两个变量同色，避免启动瞬间闪一下别的颜色。
+         注意：XML 注释里不能出现连续两个减号，所以这里别写变量名的完整形式。 -->
+    <color name="bg">#f4f5f7</color>
+    <color name="card">#ffffff</color>
+    <!-- 自适应图标的底色。2026-11-23 换新图标（青绿「酱」字）后从江财红
+         #c8102e 改成白色：新图标本身是白底圆角方，前景层在外圈是透明的，
+         底色留在红色的话四角会露出一圈红。 -->
+    <color name="ic_launcher_bg">#ffffff</color>
+</resources>
