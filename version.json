@@ -1,7 +1,7 @@
 {
   "versionName": "1.0.2",
   "versionCode": 3,
-  "downloadUrl": "https://github.com/Vesper-a11y/jiangcaitong/releases/download/v1.0.2/jiangcaitong-1.0.2.apk",
+  "downloadUrl": "https://gitee.com/vesper-a11y/jiangcaitong/releases/download/v1.0.2/jiangcaitong-1.0.2.apk",
   "changelog": [
     "修复：更新检查不再被版本号困住，以后能正常收到新版提醒",
     "教务 / 学习通 / 住理 / 智慧江财，四大服务收进一个界面",
