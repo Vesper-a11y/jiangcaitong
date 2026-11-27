@@ -1,5 +1,5 @@
 /* 检查更新专测（2026-11-25）
- * 覆盖：Gitee Release 直链拿到 json → 解析；私有仓库回登录页 HTML → 不当清单；
+ * 覆盖：Release 直链拿到 json → 解析（GitHub latest 主 / Gitee raw 备）；回登录页 HTML → 不当清单；
  *       主地址失败 → 备地址兜底；两套字段名都认；启动自动检查不改变界面。
  * 跑法：node tests/update.test.js（项目根目录，jsdom 从 node_modules 解析）
  */
@@ -106,7 +106,7 @@ async function main() {
     w.close();
   }
 
-  console.log(fails.length ? ('FAIL: ' + fails.join(' | ')) : 'PASS: 检查更新（GitHub 主/Gitee 备/COS + 双格式 + HTML 拦截 + 版本比较）');
+  console.log(fails.length ? ('FAIL: ' + fails.join(' | ')) : 'PASS: 检查更新（GitHub latest 主/Gitee raw 备 + 双格式 + HTML 拦截 + 版本比较）');
   process.exitCode = fails.length ? 1 : 0;
 }
 main();

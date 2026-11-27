@@ -128,8 +128,8 @@ const ZL = { scan: false, sheet: false, billsTry: 0, billsOpen: false, prog: '',
    自动改成 build_apk.py 里的 VERSION_NAME / VERSION_CODE —— 这里照旧要写，
    但**不用手改**，改了也会被覆盖。
    code 是整数，只增不减：比版本号字符串靠谱（"0.10.0" < "0.9.0" 是字符串比较的经典坑）。 */
-const APP_VERSION = '1.0.1';
-const APP_CODE = 2;
+const APP_VERSION = '1.0.2';
+const APP_CODE = 3;
 
 /* 2026-11-23：这里原来有 HELP_URL（功能说明书，指向 hobson.cc/help/）。
    「说明」按钮删了，地址也一起删 —— 那一页是原作者站点的航院通说明书。 */
@@ -160,22 +160,23 @@ const APP_BETA_SEQ = 0;
 const MYVER = APP_VERSION +
   (APP_CHANNEL === 'beta' && APP_BETA_SEQ > 0 ? ' v' + APP_BETA_SEQ : '');
 
-/* ===== 检查更新：版本清单地址（2026-11-27，GitHub 主 + Gitee 备）=====
- * 🔴 主地址 = GitHub Release 直链；备援 = Gitee Release 直链（老仓库还有包）。
- *    GitHub 读不到（网络 / 仓库问题）自动转 Gitee；两边都读不到才显示
- *    「暂时检查不了更新」，不报错、不弹失败框。
- * 🔴 owner/repo/tag 三处常量拼出 version.json 地址；apk 地址写在 json 的
- *    downloadUrl 字段里（换下载地址只改 json、不用重新打包）。绝不读 raw / 源码文件。
- * 🔴 发版时 GitHub / Gitee 两边 Release 都要传一份 version.json，否则备援会读到旧版。
- * 🔴 UPDATE_BACKUP_JSON 是第三个可选备援（例如 COS），留空 = 不启用。
- * 🔴 「关于」弹层的两个项目入口都保留：Gitee 老仓库 + GitHub 新仓库。 */
+/* ===== 检查更新：版本清单地址（2026-11-27 根治，固定地址不跟版本走）=====
+ * 🔴 关键：地址**不能带版本号**。旧版把 UPDATE_TAG 拼进 URL，结果每个包只读
+ *    「自己那一版」的清单，永远检测不到新版。现在改成固定地址：
+ *    ① GitHub 主源：`releases/latest/download/version.json` —— 官方 latest 简写，
+ *       自动指向最新 Release 的附件（实测 200）。发新版只传清单到新 Release 即可。
+ *    ② Gitee 备援：仓库根目录 `raw/master/version.json` —— Gitee 不支持 latest 简写，
+ *       所以把清单放进仓库，跟着代码同步；更新时改文件 push 即可（实测 raw 通道 200）。
+ *    ③ UPDATE_BACKUP_JSON 第三个可选备援（如 COS），留空 = 不启用。
+ * 🔴 GitHub 读不到自动转 Gitee，都读不到才说「暂时检查不了更新」，不报错不弹框。
+ * 🔴 apk 地址写在 json 的 downloadUrl 字段里（换下载地址只改 json、不用重新打包）。
+ * 🔴 「关于」弹层两个入口都保留：Gitee 老仓库 + GitHub 新仓库。 */
 const UPDATE_OWNER = 'vesper-a11y';
 const UPDATE_REPO = 'jiangcaitong';
-const UPDATE_TAG = 'v1.0.1';
 const UPDATE_GITHUB_JSON = 'https://github.com/' + UPDATE_OWNER + '/' + UPDATE_REPO +
-  '/releases/download/' + UPDATE_TAG + '/version.json';
+  '/releases/latest/download/version.json';
 const UPDATE_GITEE_JSON = 'https://gitee.com/' + UPDATE_OWNER + '/' + UPDATE_REPO +
-  '/releases/download/' + UPDATE_TAG + '/version.json';
+  '/raw/master/version.json';
 const UPDATE_BACKUP_JSON = '';   // ← 第三个备援（可选，如 COS）；留空不启用
 const UPDATE_JSON_URLS = [UPDATE_GITHUB_JSON, UPDATE_GITEE_JSON, UPDATE_BACKUP_JSON].filter(Boolean);
 // 「关于」弹层底部两个入口：Gitee 老仓库 + GitHub 新仓库，都保留。
