@@ -1,0 +1,188 @@
+# 酱菜通 iOS 的云编译配置（Codemagic）。
+#
+# ## 为什么不用 GitHub Actions
+#
+# 用户原来的 GitHub 账号（Hobson2233）在 2026-10 被滥用检测停用，申诉至今没回复。
+# 拿新账号去跑 CI 有两个风险：① 被判定成规避封禁，让申诉更难看；
+# ② 申诉信里说的是「很少用、手动跑」，转头就开 CI，前后对不上。
+#
+# Codemagic 免费版给个人 500 分钟 macOS M2 / 月，不需要 GitHub。
+# 按一次 12~15 分钟算，够编 30 多次。
+#
+# ## 代码放哪：极狐（jihulab.com），不是 gitlab.com
+#
+# 2024 年底起 gitlab.com 对中国大陆（含港澳）关停：访问被强制引到极狐，
+# 新账号也开不出来。极狐是那边的独家授权版，Codemagic 官方支持
+# 「Other / 自定义克隆地址 + 私有仓库口令」，所以极狐一样能编，
+# 这个文件与用哪家托管无关 —— 换 provider 不用改一个字。
+# 代价：自定义地址拿不到 webhook，所以 `triggering` 在这条路上不会自动触发，
+# 每次点 Start build 手动跑（本期就这个用法，够用）。
+#
+# ## 产物
+#
+# 未签名 ipa。签名那一步交给用户自己的 Apple ID（SideStore），
+# 所以我们这边**故意不签名** —— 要签就得把证书私钥放进 CI，那等于交出去。
+#
+# ## 一个容易忽略的点
+#
+# `mobile/web` 是界面代码的唯一源。编译前复制进工程目录，
+# 而不是在仓库里存第二份 —— 两份各自演化是最难发现的那类问题
+# （表现为「安卓是好的、iOS 显示旧的」）。
+
+workflows:
+  ios-unsigned:
+    name: 酱菜通 iOS（未签名）
+    instance_type: mac_mini_m2
+    max_build_duration: 40
+
+    environment:
+      xcode: latest
+      vars:
+        SCHEME: JiangCaiTong
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+
+    scripts:
+      - name: 装 xcodegen
+        script: |
+          set -e
+          brew install xcodegen
+          xcodegen --version
+
+      - name: 把界面代码放进工程
+        script: |
+          set -e
+          rm -rf mobile/ios/app/JiangCaiTong/web
+          cp -R mobile/web mobile/ios/app/JiangCaiTong/web
+          echo "界面文件："
+          ls -1 mobile/ios/app/JiangCaiTong/web
+
+      - name: 读版本号
+        script: |
+          set -e
+          # 🔴 版号只有一个源：mobile/ios/version.json。
+          #    project.yml 里那个 0.1.0 只是本地直接 xcodegen 时的兜底，CI 一律覆盖。
+          #    两处各写一个版本号，必然有一处忘记改 —— 表现是「装上去还是旧版、
+          #    SideStore 不认为有更新」，而编译日志里一个字都看不出来。
+          python3 - <<'PY'
+          import json, os
+          d = json.load(open("mobile/ios/version.json", encoding="utf-8"))
+          ver = str(d["version"]).strip()
+          build = int(d["build"])
+          if not ver or build <= 0:
+              raise SystemExit("version.json 里的 version/build 不合法：%r %r" % (ver, build))
+          with open(os.environ["CM_ENV"], "a", encoding="utf-8") as f:
+              f.write("IOS_VER=%s\n" % ver)
+              f.write("IOS_BUILD=%d\n" % build)
+          print("iOS 版本：%s（build %d）" % (ver, build))
+          PY
+
+      - name: 自签守门
+        script: |
+          set -e
+          # 🔴 这个包是给用户用**自己的免费 Apple ID** 重签的。
+          #    免费个人团队没有 Push、App Groups、Associated Domains、iCloud
+          #    这些能力，带上就签不出来 —— 而报错发生在**用户手机上**：
+          #    他只会说「装不上」，我们这边永远看不到那条 Provisioning profile
+          #    doesn't include ... 所以宁可让 CI 编不过，也不许它带出去。
+          BAD=0
+          if find mobile/ios/app -name "*.entitlements" | grep -q .; then
+            echo "🔴 工程里出现了 entitlements 文件："
+            find mobile/ios/app -name "*.entitlements"
+            BAD=1
+          fi
+          for k in com.apple.developer.aps-environment \
+                   com.apple.security.application-groups \
+                   com.apple.developer.associated-domains \
+                   com.apple.developer.icloud-container-identifiers; do
+            if grep -rq "$k" mobile/ios/app/project.yml mobile/ios/app/JiangCaiTong/Info.plist 2>/dev/null; then
+              echo "🔴 声明了 $k —— 免费账号签不了"
+              BAD=1
+            fi
+          done
+          if [ $BAD -ne 0 ]; then
+            echo "要带这些能力就得用付费账号（99 美元/年），那就不再是「自签分发」这条路。"
+            exit 1
+          fi
+          echo "自签守门通过：没有需要付费账号的能力"
+
+      - name: 生成工程
+        script: |
+          set -e
+          cd mobile/ios/app
+          xcodegen generate
+          ls -1
+
+      - name: 编译
+        script: |
+          cd mobile/ios/app
+          # 🔴 整份日志落盘再判断成败。
+          #    以前是 `| tail -80`：报错摘要留在末尾，真正的原因
+          #    （`error: cannot find 'X' in scope`）往往在几千行之前，
+          #    被 tail 一刀砍掉，只剩一句 "The following build commands failed"。
+          #    这种日志等于没有日志。
+          set +e
+          xcodebuild \
+            -project JiangCaiTong.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="$IOS_VER" \
+            CURRENT_PROJECT_VERSION="$IOS_BUILD" \
+            build > build.log 2>&1
+          RC=$?
+
+          if [ $RC -ne 0 ]; then
+            echo "编译失败（退出码 $RC）。下面只挑错误行，全文见 Artifacts 里的 build.log"
+            echo "================ 错误行 ================"
+            grep -n "error:" build.log | head -40
+            echo "================ 失败汇总 ================"
+            grep -n -A 12 "The following build commands failed" build.log | head -40
+            exit $RC
+          fi
+          echo "编译通过"
+          grep -c "warning:" build.log | sed 's/^/警告条数：/'
+
+      - name: 打 ipa
+        script: |
+          set -e
+          cd mobile/ios/app
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          if [ -z "$APP" ]; then
+            echo "没找到 .app —— 编译那一步没成功，往上翻日志"
+            exit 1
+          fi
+          echo "产物：$APP"
+
+          # 🔴 量一遍包里的版本号，别信「我传了 MARKETING_VERSION」。
+          #    命令行覆盖没生效时编译一样是绿的，装上去还是旧版，
+          #    而更新判据（SideStore 比版本号）就会一直说「已是最新」。
+          GOT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist")
+          GOTB=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Info.plist")
+          echo "包内版本：$GOT（build $GOTB）"
+          if [ "$GOT" != "$IOS_VER" ] || [ "$GOTB" != "$IOS_BUILD" ]; then
+            echo "🔴 包内版本和 version.json 对不上（期望 $IOS_VER / $IOS_BUILD）"
+            exit 1
+          fi
+
+          rm -rf Payload "JiangCaiTong-$IOS_VER.ipa"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry "JiangCaiTong-$IOS_VER.ipa" Payload
+          rm -rf Payload
+          ls -lh "JiangCaiTong-$IOS_VER.ipa"
+          shasum -a 256 "JiangCaiTong-$IOS_VER.ipa"
+          unzip -l "JiangCaiTong-$IOS_VER.ipa" | head -12
+
+    artifacts:
+      - mobile/ios/app/*.ipa
+      - mobile/ios/app/build.log

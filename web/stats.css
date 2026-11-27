@@ -1,0 +1,94 @@
+/* ================= 数据台（控制台）的样式 =================
+   2026-11-13：从 app.css 里拆出来，和 stats.js 一起只在测试版的包里。
+   build_apk.py 打正式版时不复制这个文件，index.html 里那行 <link> 也一起剪掉。
+   所以正式版少了这几十条规则是**故意的**，不是漏了。 */
+
+/* ================= 数据台（0.49.0，只有测试版） =================
+   一屏三件事：今天怎么样、近七天走势、哪些东西被下载/被看。
+   🔴 数字一律 tabular-nums：这一页全是数字，等宽才不会在刷新时左右抖。 */
+
+/* 入口挂在「我的」标题右边。做成一个带字的小胶囊而不是纯图标：
+   纯图标等于让人猜，而这东西一年也没几个人点，猜错一次就再也不找了。
+   宽度自适应（ghost-btn 原样是 44×44 的方按钮，塞不下「数据台」三个字）。 */
+.statsbtn {
+  width: auto; height: 32px; padding: 0 12px 0 10px;
+  display: inline-flex; align-items: center; gap: 5px;
+  border-radius: 999px; background: var(--rule); color: var(--accent);
+}
+.statsbtn svg { width: 15px; height: 15px; stroke-width: 2; }
+.statsbtn span { font-size: 13px; font-weight: 600; letter-spacing: -.1px; }
+.statsbtn:active { background: var(--rule); }
+
+.stats-loading { padding: 22px 16px; text-align: center; font-size: 13px; color: var(--sub); }
+.stats-hero { display: flex; padding: 12px 6px 4px; }
+.stats-hero > div { flex: 1 1 0; min-width: 0; text-align: center; padding: 0 4px; }
+.stats-hero b {
+  display: block; font-size: 25px; font-weight: 700; line-height: 1.15;
+  color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -.5px;
+}
+.stats-hero span { display: block; font-size: 12px; color: var(--sub); margin-top: 3px; }
+.stats-sub { padding: 0 16px 12px; font-size: 12px; color: var(--sub); }
+/* 近 7 天：一天一行、一行四个数（来访 / 在用 / 下载 / 请求）。
+   0.50.0 之前这一块是七根竖柱，柱子上没有数字；0.50.0 换成「一行一天 + 长条 + 台数」，
+   但一天还是只读得到一个数。2026-11-15 用户要「更全面」，改成一张四列的表。
+   🔴 不用长条：柱子只是把数字再画一遍，四个数并排摆着更好读，
+      也不用为每一列各挑一个最大值（四个量级不一样，四组柱子没法共用一把尺）。 */
+.dhead, .drow {
+  display: grid;
+  /* 日期一列吃剩下的宽度，四个数各自等宽右对齐 —— 数字位数变化时不会左右抖。 */
+  grid-template-columns: 1fr 42px 42px 42px 50px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+}
+.dhead {
+  height: 28px; margin-top: 2px;
+  font-size: 11px; letter-spacing: .2px; color: var(--sub);
+  border-bottom: 1px solid var(--rule);
+}
+.dhead span:not(:first-child) { text-align: right; }
+.drow { height: 34px; }
+.drow + .drow { border-top: 1px solid var(--rule); }
+.drow .d {
+  min-width: 0; font-size: 12.5px; color: var(--sub);
+  font-variant-numeric: tabular-nums;
+  display: flex; align-items: center; gap: 5px;
+}
+.drow .d em {
+  font-style: normal; font-size: 10px; line-height: 1;
+  padding: 3px 5px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+}
+.drow b {
+  text-align: right; font-size: 13.5px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+/* 请求数是个参考量（一页里的图片、脚本都算），压淡一档，别跟「来了几个人」抢眼。 */
+.drow b.dim { font-weight: 500; color: var(--sub); }
+/* 今天那一行用主色 —— 一眼看出哪一行是当下。 */
+.drow.today b { color: var(--accent); }
+.drow.today b.dim { color: var(--sub); }
+
+/* 各版本下载 / 各地址访问：两列，左边名字右边次数。
+   名字会很长（「校园网自动登录 2.1.3（电脑）」），放不下就省略，不换行 ——
+   换行会把一张卡撑成两种行高，看着像两段。 */
+.drow2 {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 34px; padding: 0 16px;
+}
+.drow2 + .drow2 { border-top: 1px solid var(--rule); }
+.drow2 .k {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 13px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.drow2 b {
+  flex: none; font-size: 13px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.stats-note {
+  font-size: 12px; line-height: 1.65; color: var(--sub);
+  padding: 0 18px 18px; margin: 0;
+}
+.stats-err { padding: 18px 16px; font-size: 13px; line-height: 1.6; color: var(--text); }
+.stats-err em { display: block; font-style: normal; color: var(--sub); margin-top: 4px; }
