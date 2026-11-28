@@ -14,6 +14,8 @@
 
 1. 在 App 里点「插件市场 → 我也做一个」，会直接打开本仓库 `plugins/` 的新建文件页；
    也可以手动在 GitHub 上新建 `plugins/<id>/<版本>.js`。提交时 GitHub 会自动开 PR。
+   🔴 新建页是空白的：**先复制 [`_template.js`](plugins/_template.js)** 再改，
+   或先看 [`plugins/` 目录说明](plugins/)。
 2. 插件能干三件事，用哪个都行，也可以一起用：
    - **生活页画一张卡**：`html`（字符串或函数）+ `css`；
    - **有自己的整页界面**：`page: { title, html, css, on }` —— 点卡片进去就是它自己的页面；
@@ -39,7 +41,10 @@
    HTML 里的 `<script>`、`onclick` 这类行内事件会被摘掉（插件自己有代码入口，
    不必借 HTML 再插一段）。
    不写 `html` / `page` 的老写法（`stats` / `state` / `action`，由 App 画）也还支持。
-   这些样子都在 `plugins/_template.js` 里，照抄改改就能用。
+   这些样子都在 **[`plugins/_template.js`](plugins/_template.js)** 里（也可看
+   [`plugins/` 目录说明](plugins/)）。🔴 **先从模板复制再改** —— 它是仓库里唯一一份
+   完整示例，四种写法和 `plugin.host` 全量 API 速查都在里面；新建文件页是空白的，
+   不会自动带出模板。
 3. 文件开头写上这几行注释，市场卡片就用它们（不写也能上架，名字退回用目录名、
    标签写「插件」）：
 

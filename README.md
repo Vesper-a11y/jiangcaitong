@@ -37,6 +37,16 @@ App 启动时会静默检查一次新版本。检测到更新后，「我的 →
   （如课表、电费）才会发送给你自己填写的 AI 服务商。服务密钥只保存在你这台手机，
   不会随请求回传给本项目。不使用 AI 助手时，不会产生任何第三方请求。
 
+## 做插件
+
+想加一张卡、一个整页，或者换个配色，都不用改 App 源码、不用重新打包。写一段 `.js` 交给仓库就行：
+
+- **模板**：[`plugins/_template.js`](plugins/_template.js) —— 四种写法和 `plugin.host` 全量 API 速查，复制过去改几个字就能用；[`plugins/` 目录](plugins/) 下也有说明
+- 放进 `plugins/<id>/<版本>.js`，到 [GitHub 新建文件页](https://github.com/Vesper-a11y/jiangcaitong/new/main/plugins) 提交 PR
+- 合并后自动上架，[清单](plugins/index.json) 不用你写；完整规矩见 [CONTRIBUTING.md](CONTRIBUTING.md)
+
+插件权限是放开的，所以每个 PR 维护者都会先看一遍代码再合并。
+
 ## 交流
 
 如果这款软件对你有帮助，欢迎来项目主页点个 Star，这是作者继续更新的最大动力。
