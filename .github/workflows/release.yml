@@ -1,10 +1,8 @@
 name: Release
 
 # ============================================================
-# 2026-11-28：触发规则按用户要求改成**只认 v* tag**。
-#   · 平时往 main 提交代码：什么都不跑，提交记录上不再挂那颗绿勾；
-#   · 打 `v1.0.4` 这种 tag 并推送：才走下面的打包流程（出 APK + 发 Release）。
-#   · 需要补发/重发时，Actions 页手动点「Run workflow」也行。
+# 2026-11-28 起：自动发版已停用，本工作流只在手动触发时执行。
+#   发版流程改为由维护者手动完成，GitHub 与 Gitee 两端同时发布。
 #
 # 为什么之前停用过、这次又打开（两个坑已经填了，别再踩回去）：
 #   1. version.json 以前写 `updateLog` 字符串，而 App 只认 `changelog` / `notes`
@@ -29,10 +27,11 @@ name: Release
 # ============================================================
 
 on:
-  push:
-    tags:
-      - 'v*'                # 只有推 v 开头的 tag 才打包发版
-  workflow_dispatch:        # 补发时手动点
+  # 2026-11-28：按维护者要求取消自动发版。推 tag 不再触发打包，
+  # 发版改为由维护者手动完成（GitHub 与 Gitee 两端同时发布）。
+  # 如需恢复自动发版：先配好 JCT_KEYSTORE_B64、JCT_KS_PASS 两个 Secret，
+  # 再把下面的 workflow_dispatch 换回 push.tags。
+  workflow_dispatch:
 
 permissions:
   contents: write          # 创建 Release / 上传附件需要的最小权限

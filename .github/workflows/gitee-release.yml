@@ -1,0 +1,43 @@
+name: Gitee Release
+
+# 把 GitHub 上已经发好的 Release 复制到 Gitee：建标签 → 建 Release → 传 APK 与 version.json。
+#
+# 为什么要有它：Gitee 不会自动同步 Release 附件，而 App 的国内备援读的是 Gitee
+# 仓库里的 version.json，里面写的是 Gitee 下载地址。缺这一步，国内用户点更新会 404。
+#
+# 只在手动触发时运行——发版仍由维护者决定，不做自动发版。
+# 前提：仓库 Secret 里已配置 GITEE_TOKEN（Gitee 私人令牌，需勾 projects 权限）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要同步到 Gitee 的版本标签（形如 v1.0.4）
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.repository == 'Vesper-a11y/jiangcaitong'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 复制 Release 到 Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GITEE_OWNER: vesper-a11y
+          GITEE_REPO: jiangcaitong
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::error::GITEE_TOKEN 未配置：Settings → Secrets and variables → Actions 新建 Secret"
+            exit 1
+          fi
+          export VERSION="${TAG#v}"
+          python3 tools/gitee_release.py
