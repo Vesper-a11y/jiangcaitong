@@ -87,6 +87,12 @@
         <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
       </button>
       <button class="wk-today" id="wkToday">今天</button>
+      <!-- U95⑦（2026-11-28）：学习助手入口。空教室删掉后空出的位置，
+           图标走顶栏那套 wk-btn 尺寸，不额外占宽。 -->
+      <button class="wk-btn wk-ai" id="wkAiBtn" aria-label="学习助手">
+        <!-- 2026-11-28：用户嫌灯泡像「点子」，换成四角星（跟参考图一致）。四角星路径。 -->
+        <svg viewBox="0 0 24 24"><path d="M12 2.5c.5 4.6 2.4 6.6 7 7.5-4.6.9-6.5 2.9-7 7.5-.5-4.6-2.4-6.6-7-7.5 4.6-.9 6.5-2.9 7-7.5z"/></svg>
+      </button>
       <!-- 2026-11-23：这里原来是「空教室」入口（图标 + 文字）。
            江财教务没有空闲教室查询接口（后端直接回「暂未提供」），
            点进去只有一句错误，所以入口删掉。#page-rooms 暂时留在文件里。 -->
@@ -610,10 +616,6 @@
           <b>快递取件</b><span class="lifew-tag">取件码</span>
         </div>
         <div class="jump-grid" id="lifeJumpGrid"></div>
-        <!-- 待取快递的取件码（2026-11-24 U78）。来源是本机通知：菜鸟/淘宝/拼多多/
-             抖音/京东的取件通知里本来就带着这串码，系统允许读通知就不必再点进去。
-             没有通知权限时这块是 hidden，卡片保持原来的「一点直达」。 -->
-        <div class="jump-codes" id="lifeJumpCodes" hidden></div>
         <div class="lifew-ft">
           <span class="lifew-st" id="lifeJumpState">● 一点直达取件码</span>
           <button type="button" class="lifew-go" id="lifeJumpAll">全部 ›</button>
@@ -799,7 +801,7 @@
                   <path d="M8.6 15.8h6.8"/>
                 </svg>
               </button>
-              <button class="wt-ico" id="wtDevAdd" aria-label="扫码添加饮水机">
+              <button class="wt-ico" id="wtDevAdd" aria-label="添加设备">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M4 8.6V6.4A2.4 2.4 0 0 1 6.4 4h2.2"/>
                   <path d="M15.4 4h2.2A2.4 2.4 0 0 1 20 6.4v2.2"/>
@@ -1781,7 +1783,7 @@
        🔴 相机打不开时这颗「粘贴内容」就是唯一退路，不能藏。 -->
   <div class="scan" id="wtScan" hidden>
     <div class="scan-bar">
-      <span>扫码添加饮水机</span>
+      <span>添加设备</span>
       <button class="scan-x" id="wtScanClose" aria-label="关闭">
         <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
@@ -1833,6 +1835,7 @@
 <script defer src="native.js"></script>
 <!-- 江财金智数据层：只在 APK 里加载（无 Android 桥时自己 return），优先于 native.js 的上游逻辑 -->
 <script defer src="jxufe_native.js"></script>
+<script defer src="ai.js"></script>
 <script defer src="app.js"></script>
 </body>
 </html>

@@ -146,6 +146,19 @@ w.NativeApi.handle = async (path) => {
   ok(!!starGiteeBtn && /Star/.test(starGiteeBtn.textContent), '关于弹层缺少 Gitee 项目入口');
   ok(!!starGithubBtn && /Star/.test(starGithubBtn.textContent), '关于弹层缺少 GitHub 项目入口');
   ok(!/发我|找我/.test(ft), '关于弹层文案不能出现「发我 / 找我」');
+  // ---- U95⑩（2026-11-28）：更新日志拆成独立弹层，入口 + 分类 + 当前版本标记 ----
+  ok(!!$('#aboutLogBtn'), '关于弹层应留「更新日志 ›」入口行');
+  ok(!$('#aboutLogBox'), '关于弹层不该再有内联的更新日志块（已拆成独立弹层）');
+  if ($('#aboutLogBtn')) {
+    click($('#aboutLogBtn'));
+    await tick(20);
+    const lf = $('#sheetBody') ? $('#sheetBody').textContent : '';
+    ok(/更新日志/.test(lf), '独立更新日志弹层缺标题');
+    ok(/新功能/.test(lf) && /修复/.test(lf), '更新日志缺「新功能 / 修复」分类小标题');
+    ok(/当前版本/.test(lf) && !!$('#sheetBody .log-tag'), '更新日志缺「当前版本」标记');
+    ok(!!$('#sheetBody .log-sheet, .sheet.log-sheet'), '更新日志弹层缺 .log-sheet 外壳标记');
+    ok(!/接口|JSON|Cookie|token|userId|抓包|逆向/.test(lf), '更新日志文案混进了内部术语');
+  }
   if ($('#fbQqCopy')) click($('#fbQqCopy'));
 
   // ---- 生活页：未登录文案 + 快递胶囊（U88）----

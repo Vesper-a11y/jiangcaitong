@@ -7308,18 +7308,11 @@
 
   /* ---------------- 智慧江财：电费 / 网费查询（2026-11-25 U91） ----------------
    *
-   * 接口来源：本机微信缓存的「智慧江财」小程序包（wx70c0beda0bb7b021）
-   * 解包分析 —— 「网费充值」页(wfcz/view.js)和「电费充值」页(dfcz_new/view.js)
-   * 请求的都是 wxcourse.jxufe.cn 的 H5 后端，**没有签名、没有 token**，
-   * 参数就是账号 + 房间号；2026-11-25 从校外实测连通（返回业务错误码，
-   * 不是网络错误）。门户应用列表里「电费充值」= dfcz_new、「网费充值」= wfcz。
+   * 数据来源：学校「智慧江财」服务，地址见下面的 JF_WX_BASE。
+   * 请求用 GET，参数只有账号和房间号；2026-11-25 从校外实测连通。
    *
-   * 🔴 只读：这层只有余额和历史记录，**没有充值 / 下单** —— 用户明确
-   *    「先不做付款」，而且 wx.requestPayment 那条链第三方 App 本就调不了。
-   *
-   * 🔴 小程序代码里 wx.request 写的是 `type:"post"`，但 wx.request 的合法
-   *    参数名是 method —— `type` 会被忽略，实际全是 **GET**，data 拼在
-   *    query 上。这里照实也用 GET（校外实测 GET 通）。
+   * 🔴 只读：这一层只提供余额和历史记录，**不做充值 / 下单** ——
+   *    用户明确「先不做付款」，第三方 App 也调不起支付。
    */
   var JF_WX_BASE = 'https://wxcourse.jxufe.cn';
 
@@ -8830,6 +8823,39 @@
         if (path === '/api/update/check') {
           return await updCheck(body && body.urls);
         }
+        // ---------------- AI 助手（U95⑦，用户自填密钥，可选功能）----------------
+        // 🔴 只做转发：JS 把完整 payload 和密钥传进来，这里发一次 POST 拿回 JSON。
+        //    密钥由 JS 从本机读、只在这一次请求里作为 header 用，不落日志、不回传。
+        //    URL 白名单：只允许 api.deepseek.com，防止被别处借这条通道乱发。
+        if (path === '/api/ai/chat') {
+          var aurl = String((body && body.url) || '');
+          var akey = String((body && body.key) || '');
+          var apayload = (body && body.payload) || {};
+          if (!/^https:\/\/api\.deepseek\.com\//i.test(aurl)) {
+            return { ok: false, error: '服务地址不允许' };
+          }
+          if (!akey) return { ok: false, error: '请先填写服务密钥' };
+          var aj = '';
+          try { aj = JSON.stringify(apayload); } catch (e0) { aj = ''; }
+          var ar = null;
+          try {
+            ar = await Promise.race([
+              http('POST', aurl, aj, '', 0, {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + akey
+              }),
+              new Promise(function (resolve) { setTimeout(function () { resolve(null); }, 25000); })
+            ]);
+          } catch (e1) { ar = null; }
+          if (!ar || Number(ar.status) !== 200) {
+            var st = ar && Number(ar.status);
+            return { ok: false, status: st, error: st === 401 ? '服务密钥不对' : '服务没连上，请稍后再试' };
+          }
+          var at = String(ar.body || '').trim();
+          if (at.charAt(0) !== '{') return { ok: false, error: '服务返回异常' };
+          try { return { ok: true, data: JSON.parse(at) }; }
+          catch (e2) { return { ok: false, error: '服务返回异常' }; }
+        }
         return { ok: false, error: '这个功能用不了（App 版本太旧）' };
       } catch (e) {
         var msg = (e && e.message) || String(e);
@@ -8935,37 +8961,6 @@
       try {
         return String(window.Android.openJump(String(pkg || ''), String(uri || '')) || 'no');
       } catch (e) { return 'no'; }
-    },
-
-    /* ---- 待取快递的取件码（Android 专属，2026-11-24 U78）----------------
-     * 数据来自通知监听（DingListener → Parcels），**只在本机**：
-     * 菜鸟/淘宝/拼多多/抖音/京东的取件通知里本来就带码，系统授权后就能读。
-     * 网页版没有这条路，一律返回空 —— 卡片会退回「一点直达」。
-     */
-    parcels: function () {
-      if (!(window.Android && typeof window.Android.parcels === 'function')) return [];
-      try {
-        var a = JSON.parse(String(window.Android.parcels() || '[]'));
-        return Object.prototype.toString.call(a) === '[object Array]' ? a : [];
-      } catch (e) { return []; }
-    },
-    /** '1' = 已给通知使用权；'0' = 没给（或网页版）。 */
-    parcelsPerm: function () {
-      if (!(window.Android && typeof window.Android.parcelsPerm === 'function')) return '0';
-      try { return String(window.Android.parcelsPerm() || '0'); } catch (e) { return '0'; }
-    },
-    parcelsAsk: function () {
-      if (!(window.Android && typeof window.Android.parcelsAsk === 'function')) return 'none';
-      try { window.Android.parcelsAsk(); return 'ok'; } catch (e) { return 'none'; }
-    },
-    parcelsClear: function () {
-      if (!(window.Android && typeof window.Android.parcelsClear === 'function')) return 'none';
-      try { window.Android.parcelsClear(); return 'ok'; } catch (e) { return 'none'; }
-    },
-    /** 立刻扫一遍通知栏（同步：返回后 parcels() 就是新的）。 */
-    parcelsScan: function () {
-      if (!(window.Android && typeof window.Android.parcelsScan === 'function')) return 'none';
-      try { window.Android.parcelsScan(); return 'ok'; } catch (e) { return 'none'; }
     },
 
     /** 钉钉通知（Android 专属，0.52.1 v12）。网页版一律返回"没有"。

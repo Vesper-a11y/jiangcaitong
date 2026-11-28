@@ -115,12 +115,18 @@ const KEY = {
   jfAcc: 'zt.jfacc',
   jfRoom: 'zt.jfroom',
   jfData: 'zt.jfdata',
+  /* U95⑦ AI 助手（2026-11-28）：用户自己填的服务密钥 + 本机对话记录。
+     🔴 都不塞进 KEY.settings —— 那边被 store.set(KEY.settings, CFG) 整体覆盖。
+     🔴 密钥只留本机、不随任何请求回传，也不写进对话气泡；
+        对话内容（含查询结果）会发给用户填的服务商，这一点在界面里明示。 */
+  aiKey: 'zt.aikey',
+  aiChat: 'zt.aichat',
 };
 const DAY_CN = ['一', '二', '三', '四', '五', '六', '日'];
 /* 住理生活（洗澡热水）的界面状态（2026-11-24 U73）。
    声明在这么靠前的位置，是因为 closeSheet() 要清它的 sheet 标记 —— 那个函数
    可能在初始化期间就被调到，晚声明会撞上 TDZ。 */
-const ZL = { scan: false, sheet: false, billsTry: 0, billsOpen: false, prog: '', progBad: false };
+const ZL = { scan: false, sheet: false, billsTry: 0, billsOpen: false, prog: '', progBad: false, progAt: 0 };
 /* 🔴 版本号只写一次（在 android/build_apk.py 顶部）。
    以前「我的 → 版本」那行是 HTML 里写死的 0.1.0，安卓的 versionName 又写在
    build_apk.py 里，两处各写一遍，迟早会出现「软件里显示 0.1.0、装上去是 0.1.1」
@@ -128,8 +134,8 @@ const ZL = { scan: false, sheet: false, billsTry: 0, billsOpen: false, prog: '',
    自动改成 build_apk.py 里的 VERSION_NAME / VERSION_CODE —— 这里照旧要写，
    但**不用手改**，改了也会被覆盖。
    code 是整数，只增不减：比版本号字符串靠谱（"0.10.0" < "0.9.0" 是字符串比较的经典坑）。 */
-const APP_VERSION = '1.0.2';
-const APP_CODE = 3;
+const APP_VERSION = '1.0.3';
+const APP_CODE = 5;
 
 /* 2026-11-23：这里原来有 HELP_URL（功能说明书，指向 hobson.cc/help/）。
    「说明」按钮删了，地址也一起删 —— 那一页是原作者站点的航院通说明书。 */
@@ -1654,8 +1660,7 @@ function openMyCourseForm(code, preset) {
 
   $('sheetBody').innerHTML =
     '<div class="sh-title">' + (editing ? '改这门课' : '加一门课') + '</div>' +
-    '<div class="sh-sub">教务系统里没有的课可以自己加。只存在' +
-      envText('这台电脑', '这台手机') + '上，同步不会冲掉。</div>' +
+    '<div class="sh-sub">仅保存在本机。</div>' +
     pendHtml +
     '<label class="field"><span>课程名</span>' +
       '<input id="myName" type="text" maxlength="24" autocomplete="off" placeholder="像 大学物理实验">' +
@@ -2037,17 +2042,9 @@ function pendingSlots() {
   return out;
 }
 
-function setHidden(code, hide) {
-  const s = hiddenSet();
-  if (hide) s.add(code); else s.delete(code);
-  CFG.hidden = Array.from(s);
-  store.set(KEY.settings, CFG);
-  renderSchedule(); renderMe();
-}
-
 /** code -> 课程（同 code 可能有多条记录，取第一条够用）。
- *  ⚠️ 0.46.0 起走 allCourses()：自己加的课也要能查到 ——「已隐藏」列表里
- *     它们同样可能被整门藏掉，查不到就显示成「这门课已不在最新数据里」。 */
+ *  ⚠️ 走 allCourses()：自己加的课也要能查到 ——「待安排」里查不到就
+ *     显示成「这门课已不在最新数据里」。 */
 function courseByCode(code) {
   return allCourses().find((c) => c.code === code) || null;
 }
@@ -4672,9 +4669,10 @@ function closeSheet() {
     if (api) api.stop('');
   }
   $('sheetMask').hidden = true;
-  // 关于弹层给外壳加过 .about-sheet（收紧留白），关掉时撤掉，别污染下一个弹层。
+  // 关于 / 更新日志弹层给外壳加过 .about-sheet / .log-sheet（改留白），关掉时一起撤掉，
+  // 别污染下一个弹层。
   if ($('sheetBody') && $('sheetBody').parentElement) {
-    $('sheetBody').parentElement.classList.remove('about-sheet');
+    $('sheetBody').parentElement.classList.remove('about-sheet', 'log-sheet');
   }
   // 住理生活的弹层也是走这一个 sheet：关掉时把标记清掉，
   // 免得「记一笔」在弹层关了之后还去重画一个看不见的 body。
@@ -5170,6 +5168,12 @@ $('wkToday').addEventListener('click', () => {
   store.set(KEY.settings, CFG);
   renderSchedule();
   $('schScroll').scrollTop = 0;
+});
+
+// U95⑦：课表顶栏的学习助手入口（AI 模块在 index.html 里先于本文件加载）。
+$('wkAiBtn').addEventListener('click', () => {
+  if (window.AI && typeof AI.open === 'function') AI.open();
+  else toast('当前版本不支持学习助手');
 });
 
 $('viewToggle').addEventListener('click', () => {
@@ -6165,7 +6169,7 @@ function openExFilterSheet() {
     '<svg class="ck" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>';
   $('sheetBody').innerHTML =
     '<div class="sh-title">筛选平台</div>' +
-    '<div class="sh-sub">不用的取消勾选，学习页就只留下你要的板块。成绩和作业属于学习通。</div>' +
+    '<div class="sh-sub">取消勾选即可隐藏对应板块。</div>' +
     '<div class="picklist">' + opt('cx') + opt('grade') +
     '<div class="exf-div" aria-hidden="true"></div>' + opt('mooc') + '</div>' +
     '<div class="sheetbtns"><button class="btn primary" id="exfDone">完成</button></div>';
@@ -7102,14 +7106,12 @@ function renderMe() {
   //    以前只有藏过课才出现，现在跟着隐藏条数一起藏着的话，
   //    想加课的人根本没有地方可点。
   //    副标题只报「有变化」的那一半；什么都没改过就说「加课 / 调整」。
-  //    2026-11-23：课程详情弹层不再提供「隐藏」按钮，这里跟着改口 ——
-  //    但仍要显示「藏了 N 门」，因为以前藏过的课得有地方恢复。
-  const hid = CFG.hidden || [];
+  //    2026-11-28：整门隐藏的入口和恢复列表都已下线，这里不再报「藏了 N 门」，
+  //    免得副标题写着有、点进去却找不到地方恢复。单节隐藏仍有「待安排」承接。
   const hidSlots = CFG.hideSlots || [];
   const mineN = myCourses().length;
   const parts = [];
   if (mineN) parts.push('加了 ' + mineN + ' 节');
-  if (hid.length) parts.push('藏了 ' + hid.length + ' 门');
   if (hidSlots.length) parts.push('藏了 ' + hidSlots.length + ' 节');
   $('meHidden').textContent = parts.length ? parts.join(' · ') : '加课 / 调整';
 
@@ -7602,13 +7604,11 @@ $('calIcs').addEventListener('click', exportDueIcs);
  *    上面那句「共 N 条」和入口那一行的副标题就都对不上了。
  */
 function renderCourseAdjust() {
-  const hid = CFG.hidden || [];
   const pend = pendingSlots();     // 只藏了某一节的课（待安排）
   const mine = myCourses();
 
   let html = '<div class="sh-title">课程调整</div>' +
-    '<div class="sh-sub">两件事都只改这台' + envText('电脑', '手机') +
-      '上的显示，教务系统那边没有任何变化。</div>';
+    '<div class="sh-sub">仅调整本机课表显示。</div>';
 
   // ---- 自己加的课 ----
   html += '<div class="pickhead">自己加的</div>';
@@ -7628,29 +7628,7 @@ function renderCourseAdjust() {
     });
     html += '</div>';
   } else {
-    html += '<p class="cx-note">还没有。补课、实验、临时加的课都能加进来。</p>';
-  }
-
-  // ---- 藏起来的（整门课） ----
-  // 空的也照样给个标题：用户点进来就是想知道「我到底藏没藏过东西」，
-  // 整块消失的话他会以为这功能坏了。
-  html += '<div class="pickhead">藏起来的</div>';
-  if (!hid.length) {
-    html += '<p class="cx-note">没有整门藏起来的课。</p>';
-  } else {
-    html += '<div class="hidlist">';
-    hid.forEach((code) => {
-      const c = courseByCode(code);
-      const name = c ? c.name : '（这门课已不在最新数据里）';
-      const sub = c ? [c.teacher, c.room].filter(Boolean).join(' · ') : '';
-      html += '<div class="hidrow">' +
-        '<div class="hidtxt"><div class="hidname">' + esc(name) + '</div>' +
-        (sub ? '<div class="hidsub">' + esc(sub) + '</div>'
-             : '<div class="hidsub">整门都没显示</div>') + '</div>' +
-        '<button class="hidback" data-code="' + esc(code) + '">恢复</button>' +
-        '</div>';
-    });
-    html += '</div>';
+    html += '<p class="cx-note">暂无</p>';
   }
 
   // ---- 待安排（只藏了某一节的课） ----
@@ -7659,7 +7637,7 @@ function renderCourseAdjust() {
   // **现在不显示，但课还在**。每行两颗按钮，主按钮直接开一张填好的加课表单。
   html += '<div class="pickhead">待安排</div>';
   if (!pend.length) {
-    html += '<p class="cx-note">没有待安排的课。藏掉某一节时会先放到这里。</p>';
+    html += '<p class="cx-note">暂无</p>';
   } else {
     html += '<div class="hidlist">';
     pend.forEach((it) => {
@@ -7676,14 +7654,13 @@ function renderCourseAdjust() {
         '</div></div>';
     });
     html += '</div>';
-    html += '<p class="cx-note">「排时间」会用课名、老师、教室开新表单，' +
-      '你只要选时间。排好之后它就是一门自己加的课。</p>';
+    html += '<p class="cx-note">「排时间」保留课程信息，只重选时间。</p>';
   }
 
   html += '<div class="sheetbtns">' +
     '<button class="btn primary block" id="myAdd">添加课程</button></div>' +
     // 长按那条路没有任何视觉提示，不写出来没人会去试。
-    '<p class="tip note">或长按课表空白格，星期和节次自动带入</p>';
+    '<p class="tip note">或长按课表空白格添加</p>';
 
   $('sheetBody').innerHTML = html;
   $('sheetMask').hidden = false;
@@ -7712,11 +7689,7 @@ function renderCourseAdjust() {
         setSlotsHidden(btn.dataset.scode, Number(btn.dataset.day), ps, false);
         renderCourseAdjust();
         toast('放回原处了');
-        return;
       }
-      setHidden(btn.dataset.code, false);
-      renderCourseAdjust();
-      toast('已恢复显示');
     });
   });
 }
@@ -8140,12 +8113,18 @@ function widgetPush() {
         // 同一门课的下一小节：只把结束时间往后推，不新增一行
         const e = (tt[p] && tt[p][1]) || '';
         if (e) cur.end = e;
+        cur.p1 = p;                    // U95⑨：连堂的结束节次跟着往后推
         continue;
       }
       cur = {
         key: key,
         start: (tt[p] && tt[p][0]) || '',
         end: (tt[p] && tt[p][1]) || '',
+        // U95⑨（2026-11-28）：带上节次号（0-based，第 p+1 节）。连堂课合并时
+        // p0 不随循环变（起始那节），p1 在下面合并分支里往后推。小组件靠它说
+        // 「现在第几节 / 下节第几节」，不用自己猜作息表。
+        p0: p,
+        p1: p,
         c: one.name || '',
         r: String(one.room || '').trim(),
       };
@@ -8161,6 +8140,7 @@ function widgetPush() {
       t: (x.start && x.end) ? (x.start + '~' + x.end) : (x.start || x.end || ''),
       c: x.c,
       r: x.r,
+      p0: x.p0, p1: x.p1,   // U95⑨：节次号（0-based），给小组件算「现在第几节」
     }));
 
     // 🔴 0.49.0：积分任务进度。
@@ -8175,9 +8155,15 @@ function widgetPush() {
     // 挑哪几条见 dueSoonList()；`du` 保留给老版小组件（它只认一条）。
     const du = dueSoon();
     const ds = dueSoonList().map((x) => ({ k: x.k, c: x.c, t: x.t, h: x.h }));
+
     api.pushWidget(JSON.stringify({
       d: '周' + DAY_CN[di], n: merged.length, it: it, td: td, tn: tn, du: du,
       ds: ds,
+      // U95⑨：推送那天的日期（yyyy-MM-dd）+ 今天星期索引，给小组件判断
+      // 「这份数据是不是今天的」——隔天没同步就不再说「现在第几节」。
+      ts: day.getFullYear() + '-' + String(day.getMonth() + 1).padStart(2, '0') +
+          '-' + String(day.getDate()).padStart(2, '0'),
+      di: di,
     }));
   } catch (e) {
     // 小组件画不出来不影响 App 本身。
@@ -8265,6 +8251,13 @@ function dueCacheSave(items, src) {
 window.__hytPage = function (name) {
   try {
     const n = String(name || '');
+    // U95⑨补充：生活页（电费 / 快递卡片都在这儿）要从桌面组件直达。
+    // 🔴 生活页的实际 id 是 page-campus（底栏那格写「生活」，但页面 id 叫 campus），
+    //    别写成 switchTab('life')——没有那个页面，会跳到空白。
+    if (n === 'life') {
+      switchTab('campus');
+      return;
+    }
     if (n === 'exams' || n === 'me' || n === 'campus') {
       switchTab(n);
       return;
@@ -8437,7 +8430,7 @@ function showRemindAsk() {
   if (!api) return;
   $('sheetBody').innerHTML =
     '<div class="sh-title">开启上课提醒？</div>' +
-    '<div class="sh-sub">上课前提醒教室，作业和考试也会提醒。</div>' +
+    '<div class="sh-sub">上课、作业、考试前提醒。</div>' +
     '<div class="sheetbtns">' +
     '<button class="btn" id="rmAskNo">暂不</button>' +
     '<button class="btn primary" id="rmAskYes">开启提醒</button></div>';
@@ -8473,16 +8466,14 @@ $('btnWidget').addEventListener('click', () => {
   const has = !!(window.AndroidRemind && window.AndroidRemind.pushWidget);
   $('sheetBody').innerHTML =
     '<div class="sh-title">桌面小组件</div>' +
-    '<div class="sh-sub">在桌面上放一张小卡片，一眼看到今天有几节课、' +
-    '下一节在哪，还有积分任务做到哪一步了。</div>' +
-    (has ? '' : '<p class="tip note bad">小组件要装 App 才有，网页版加不了。</p>') +
+    '<div class="sh-sub">在桌面查看今天的课和下一节。</div>' +
+    (has ? '' : '<p class="tip note bad">需安装 App 后使用。</p>') +
     '<ol class="howto">' +
     '<li>回到手机桌面，长按空白处（不要长按图标）</li>' +
     '<li>点「小组件」（部分手机叫「小部件」）</li>' +
     '<li>在列表里找「酱菜通」，按住拖到桌面上</li>' +
     '</ol>' +
-    '<p class="tip note">列表里找不到的话，先打开一次本应用再回来找 —— ' +
-    '系统要等应用跑过一次，才会把它列进去。</p>' +
+    '<p class="tip note">找不到时先打开一次本应用。</p>' +
     '<div class="sheetbtns"><button class="btn primary" id="wgOk">知道了</button></div>';
   $('sheetMask').hidden = false;
   $('wgOk').addEventListener('click', () => { $('sheetMask').hidden = true; });
@@ -8512,8 +8503,7 @@ $('btnTimes').addEventListener('click', () => {
 function openTimeEdit() {
   const tt = times();
   let html = '<div class="sh-title">上课时间</div>' +
-    '<div class="sh-sub">按实际作息修改，课表会显示起止时间，' +
-    '上课提醒也按这个算</div>' +
+    '<div class="sh-sub">课表和提醒按此时间计算。</div>' +
     '<div class="timerows">';
   tt.forEach((t, i) => {
     html += '<div class="timerow"><span class="tn">第' + (i + 1) + '节</span>' +
@@ -8570,7 +8560,7 @@ $('yktAlert').addEventListener('click', () => {
   const cur = Number(CFG.alertLow) > 0 ? Number(CFG.alertLow) : 20;
   $('sheetBody').innerHTML =
     '<div class="sh-title">余额提醒</div>' +
-    '<div class="sh-sub">一卡通余额低于这个数时，「校园」页会提醒你。</div>' +
+    '<div class="sh-sub">余额低于此值时提醒。</div>' +
     '<label class="field"><span>阈值（元）</span>' +
     '<input id="alVal" type="number" inputmode="decimal" min="1" max="999" step="1" ' +
     'value="' + cur + '"></label>' +
@@ -9107,8 +9097,7 @@ function openWxSheet() {
   const s0 = wxApi() ? wxApi().state() : null;
   $('sheetBody').innerHTML =
     '<div class="sh-title">登录完美校园</div>' +
-    '<div class="sh-sub">完美校园是全国平台，用它注册的<b>手机号</b>登录，' +
-    '学号登不了；只存登录凭证，不存密码</div>' +
+    '<div class="sh-sub">用注册手机号登录，不保存密码。</div>' +
     // 🔴 这句是实情，也是用户 2026-11-13 问的那件事的答案：那个平台
     //    **一次只认一台设备**，两边各自登录就互相顶。不写在这儿，
     //    他只会看到「余额又查不到了」，然后去怪这个按钮。
@@ -9206,8 +9195,7 @@ function wxSmsStep(phone, phone4, note) {
   const tail = phone4 ? ('尾号 ' + phone4 + ' 的手机') : '这台手机';
   $('sheetBody').innerHTML =
     '<div class="sh-title">输入验证码</div>' +
-    '<div class="sh-sub">完美校园首次在本机登录，需短信验证。' +
-      '验证码会发到' + esc(tail) + '上。' +
+    '<div class="sh-sub">首次登录需短信验证，验证码发至 ' + esc(tail) + '。' +
       (note ? '<br>' + esc(note) : '') + '</div>' +
     '<label class="field"><span>验证码</span>' +
     '<input id="wxSms" type="tel" inputmode="numeric" autocomplete="one-time-code" ' +
@@ -9920,17 +9908,16 @@ function moocBusyHtml() {
   return '<div class="card cx-login">' +
     '<h2 class="cx-h">正在读课程…</h2>' +
     '<div class="cx-bar"><i style="width:60%"></i></div>' +
-    '<p class="cx-note">每门课一次请求，约几秒完成。</p>' +
+    '<p class="cx-note">请稍候…</p>' +
     '</div>';
 }
 
 function moocLoginHtml() {
   return '<div class="card cx-login">' +
     '<h2 class="cx-h">连接中国大学 MOOC</h2>' +
-    '<p class="cx-p">官方登录页，登录一次即可。' +
-    '只读课程和作业，不会替你学或交</p>' +
+    '<p class="cx-p">登录一次即可查看课程和作业。</p>' +
     '<button class="btn primary block" id="moocGo">去官方页面登录</button>' +
-    '<p class="cx-note">登录态绑定本机，换账号后退出并重新登录即可</p>' +
+    '<p class="cx-note">换账号请退出后重新登录</p>' +
     '</div>';
 }
 
@@ -9999,8 +9986,7 @@ function moocTodoHtml() {
       ? '<p class="cx-note">' +
         timeAgo(Math.floor(Date.now() / 1000) - MOOC.age) + '</p>' : '') +
     (oldPast.length
-      ? '<p class="cx-note">另有 ' + oldPast.length + ' 条往期课程的考试没参加' +
-        '（课程已结课，不再算进待交）</p>' : '') +
+      ? '<p class="cx-note">另有 ' + oldPast.length + ' 条往期考试未参加。</p>' : '') +
     (d.failed && d.failed.length
       ? '<p class="cx-note">有 ' + d.failed.length + ' 门课没读到：' +
         esc(d.failed.map((x) => x.course).join('、')) + '</p>' : '') +
@@ -10136,7 +10122,7 @@ function cxPaintLogin() {
     // 0.39.1：原来是「密码只用来换一次登录凭证，之后和门户密码一样加密存在
     //    这台手机里。存住以后登录态过期，点一下「重连」就行，不用再输。」
     //    —— 三句话说了一件事，还夹着「登录凭证」这种词。
-    '<p class="cx-note" id="cxTip">密码只存本机，过期点「重连」即可</p>' +
+    '<p class="cx-note" id="cxTip">密码仅存本机</p>' +
     '</div>';
 
   // 出错时把这行变红。默认是灰色说明 —— 一进来就红着，像在报错。
@@ -11384,7 +11370,7 @@ function cxMailPaint() {
   } else {
     // 有旧数据但这次没更新上：说一句，但不把列表拿掉。
     if (CX.mail.err) {
-      h += '<p class="tip note bad">这次没更新上，下面这些是上次读到的。</p>';
+      h += '<p class="tip note bad">以下为上次记录。</p>';
     }
     h += '<div class="ml-list">' + rows.map((row) => {
       const it = row.it;
@@ -11538,7 +11524,7 @@ function cxMailPaint() {
 
 async function cxDisconnect() {
   const ok = await askConfirm('断开学习通',
-    '删掉本机账号密码与作业记录，需重新登录', '断开');
+    '将清除本机记录并退出登录', '断开');
   if (!ok) return;
   try { await api('/api/cx/logout', {}); } catch (e) { /* 本地清掉就行 */ }
   cxStopPoll();
@@ -12095,7 +12081,7 @@ function cxPaintTodo() {
         (s.course ? '（' + esc(s.course) + '）' : '') + '</p>' +
       '<div class="cx-bar"><i style="width:' + pct + '%"></i></div>' +
       (s.phase ? '<p class="cx-note">正在查：' + esc(s.phase) + '</p>' : '') +
-      '<p class="cx-note">约需 2 分钟，可先切换到其他页面，稍后返回查看进度。</p>' +
+      '<p class="cx-note">约需 2 分钟，可稍后回来查看。</p>' +
       '</div>';
     $('cxBody').innerHTML = html;
     return;
@@ -12229,7 +12215,7 @@ function cxPaintTodo() {
   //    · 其他（平台改版 / 网络抖动）：在头部副标题写「这次没更新上」就够了。
   //      每次打开都甩一条红字，只会让人以为 App 坏了 —— 而列表其实是好的。
   if (stale && s.kind === 'auth') {
-    html += '<p class="cx-note err">登录态过期了，下面这些是上次查到的。</p>' +
+    html += '<p class="cx-note err">登录已过期，以下为上次记录。</p>' +
             cxRelinkHtml();
   }
 
@@ -12269,11 +12255,10 @@ function cxPaintTodo() {
         '<span class="cx-signidle">现在没有要签的</span></div></div>';
   } else if (!items.length) {
     html += '<p class="cx-note">' +
-      (all.length ? '这一类里现在没有东西。'
+      (all.length ? '暂无'
                   : (missedN
-                      ? '这次没查全（' + missedN + ' 门课没读到），所以不能说'
-                        + '「都交了」—— 没查到的课里可能有作业。'
-                      : '上次检查：作业都交了，没有待考的试')) +
+                      ? '有 ' + missedN + ' 门课没读到，结果可能不全。'
+                      : '暂无待办')) +
       '</p>';
   } else if (group === 'course') {
     html += '<div class="cx-list cx-list-page">' +
@@ -12378,7 +12363,7 @@ function cxPaintTodo() {
   if (kind === 'all') {
     const odd = sk.odd || d.other || 0;
     if (odd) {
-      html += '<p class="cx-note">还有 ' + odd + ' 条状态认不出，没列进来。</p>';
+      html += '<p class="cx-note">另有 ' + odd + ' 条未显示。</p>';
     }
   }
 
@@ -12494,8 +12479,7 @@ function openCxSkipSheet() {
   if (!rows.length) {
     $('sheetBody').innerHTML =
       '<div class="sh-title">屏蔽课程</div>' +
-      '<div class="sh-sub">还没有课程清单。先在「学习」页点一次「检查一次」，' +
-        '扫完就能在这里逐门开关。</div>' +
+      '<div class="sh-sub">先在「学习」页检查一次。</div>' +
       '<div class="sheetbtns"><button class="btn" id="skipClose">知道了</button></div>';
     $('sheetMask').hidden = false;
     $('skipClose').addEventListener('click', () => { $('sheetMask').hidden = true; });
@@ -12514,8 +12498,7 @@ function openCxSkipSheet() {
 
   $('sheetBody').innerHTML =
     '<div class="sh-title">屏蔽课程</div>' +
-    '<div class="sh-sub">打上标记的课不再检查作业和签到，下次检查生效。课表不受影响。' +
-      '本学期的课也可以屏蔽。</div>' +
+    '<div class="sh-sub">标记的课不再检查作业和签到。</div>' +
     '<div class="setrows cx-skiplist">' +
       list.map((x) =>
         '<div class="setrow">' +
@@ -13107,9 +13090,7 @@ window.__appResume = function () {
   resetViewportShift();
   setTimeout(resetViewportShift, 120);
   if (typeof jxPullWebCookie === 'function') jxPullWebCookie();
-  // U84：从「淘宝取件页」回来时把刚认到的码读出来重画（那边是自动关窗的）。
   try {
-    if (typeof JUMP !== 'undefined') JUMP.codesAt = 0;
     renderLifeWidgets();
   } catch (e) { /* 生活页还没渲染过就算了 */ }
   return 1;
@@ -13250,8 +13231,7 @@ async function unbindJw() {
   //    不弹框直接返回 false，于是整段代码从来没执行过（按钮形同虚设）。
   //    换成自绘确认框，原因见 askConfirm 上面那段。
   const ok = await askConfirm('解除绑定',
-    envText('删掉账号密码与已同步数据，门户一并断开',
-      '删掉账号密码与已同步数据，门户一并断开。'),
+    '将清除本机数据并断开连接',
     '解除绑定');
   if (!ok) return;
   // 🔴 先停后台补取，再去打网络。以前这句放在 await 后面，
@@ -13297,20 +13277,13 @@ function storageUsage() {
 /** 「清除本机缓存」确认框的正文。有真实占用就把数摆出来 ——
  *  「占 52 MB，其中 48 MB 是缓存」比「会删掉课表」更能让人明白点的是哪一件事。 */
 function clearCacheTip(u) {
-  if (!u) {
-    return envText('只清手机里的缓存，电脑上的账号还留着。',
-      '删掉课表、成绩、一卡通、公告，账号保留');
-  }
+  if (!u) return '清除缓存，账号保留。';
   const cache = (Number(u.webview) || 0) + (Number(u.cache) || 0);
   const apk = Number(u.apk) || 0;
   const all = Number(u.total) || (Number(u.data) || 0) + apk;
-  const tail = envText('电脑上的账号还留着。', '账号还留着，不用重新绑定。');
-  if (cache < 1024 * 1024) {
-    return '现在占 ' + fmtBytes(all) + '，没什么可清的。清掉课表、成绩这些缓存后，' +
-      '下次进来会重新同步。' + tail;
-  }
-  return '现在占 ' + fmtBytes(all) + '，其中 ' + fmtBytes(cache) +
-    ' 是网页图片和脚本，能重新下回来。\n\n清掉会腾出空间，只是下次打开慢一点。' + tail;
+  if (cache < 1024 * 1024) return '当前占用 ' + fmtBytes(all) + '。清除后账号保留。';
+  return '当前占用 ' + fmtBytes(all) + '，其中缓存 ' + fmtBytes(cache) +
+    '。清除后账号保留。';
 }
 
 /** 清本机缓存。
@@ -13451,6 +13424,42 @@ $('rowMisc').addEventListener('click', clearCacheAsk);
  */
 const ABOUT_QQ = '1135309695';
 
+/**
+ * 更新日志（2026-11-28 用户要求单独一页展示）：内容**内置在 App 里**，不联网。
+ * 为什么内置：测试版（NO_UPDATE）不做更新检查，如果日志依赖网络清单，测试包里
+ * 就是空的、没法验；写成常量则正式版 / 测试版都能看，且不访问任何外部地址。
+ * 🔴 以后每发一版：把新版本内容加到数组**最前面**，和构建脚本的 VERSION_NAME 一起改。
+ * 文案是正常软件话术，一句一件事，不写接口 / 版本号机制这类内部说法。
+ */
+const BUILTIN_CHANGELOG = [
+  { v: '1.0.3', date: '2026-11-28', groups: [
+      { t: '新功能', items: [
+          '课表顶栏加入学习助手，问一句就能查课表、查电费；密钥只保存在本机'
+      ]},
+      { t: '优化与修复', items: [
+          '精简各处提示文字，界面更清爽',
+          '修复部分手机上课表挤在一行、个别周次课程不显示的问题',
+          '开水结果按设备的实际状态提示'
+      ]}
+  ]},
+  { v: '1.0.2', date: '2026-11-28', groups: [
+      { t: '新功能', items: [
+          '教务、学习通、住理生活、智慧江财四大服务收进一个界面',
+          '发现新版本会提醒，点一下就能下载安装',
+          '只读查询、数据留在本机，没有广告'
+      ]},
+      { t: '修复', items: [
+          '修好更新检查：以前受旧版本号影响收不到新版提醒，现在正常了'
+      ]}
+  ]},
+  { v: '1.0.0', date: '2026-11-25', groups: [
+      { t: '新功能', items: [
+          '全新版本重新出发，课表、成绩、考试、作业都能在手机上查',
+          '「我的」页换成「关于」，能看到版本、更新日志和交流群'
+      ]}
+  ]}
+];
+
 /** 版本号字符串比大小：能被 parseInt 就按数字，否则按点分段比。 */
 function updNewer(remote, cur) {
   const rc = Number(remote.code || 0);
@@ -13509,19 +13518,22 @@ function paintAboutUpdate() {
 }
 
 function openAboutSheet() {
-  const u = UPDATE_LAST;
-  const notes = (u && u.notes && u.notes.length) ? u.notes : [];
-  const logHtml = notes.length
-    ? '<div class="about-log">' + notes.map((s) =>
-        '<div class="about-logline">' + esc(s) + '</div>').join('') + '</div>'
-    : '<div class="sh-sub">安装后首次检查会显示这里的更新说明。</div>';
-  // 测试版（NO_UPDATE）：没有更新状态/更新日志，也没有项目链接 —— 不访问仓库。
+  // 更新日志（2026-11-28）已从关于弹层里拆成独立弹层，这里只留一行入口。
+  // 两处都要有：更新日志是本机内置内容、不联网，测试版装机也看得见。
+  const logRow =
+    '<button type="button" class="about-row" id="aboutLogBtn">' +
+      '<span class="ak">更新日志</span>' +
+      '<span class="about-arrow" aria-hidden="true">›</span>' +
+    '</button>';
+  // 测试版（NO_UPDATE）：没有更新状态，也没有项目链接 —— 不访问仓库；
+  // 但「更新日志」是本机内容，照常留入口。
   const verCard = NO_UPDATE
     ? '<div class="about-card">' +
         '<div class="about-row">' +
           '<span class="ak">App 版本</span>' +
           '<span class="av">v' + esc(APP_VERSION) + ' 测试版</span>' +
         '</div>' +
+        logRow +
       '</div>'
     : '<div class="about-card">' +
         '<button type="button" class="about-row" id="aboutVerBtn">' +
@@ -13532,11 +13544,7 @@ function openAboutSheet() {
             '<span class="about-state" id="aboutUpdateState"></span>' +
             '<span class="about-refresh" aria-hidden="true">↻</span></span>' +
         '</button>' +
-        '<button type="button" class="about-row" id="aboutLogBtn">' +
-          '<span class="ak">更新日志</span>' +
-          '<span class="about-arrow" aria-hidden="true">›</span>' +
-        '</button>' +
-        '<div id="aboutLogBox" hidden>' + logHtml + '</div>' +
+        logRow +
       '</div>';
   // 2026-11-27：两个项目入口都保留 —— Gitee 老仓库 + GitHub 新仓库。
   // 文案是正常软件话术（不出现「发我 / 找我」），点一下直接在浏览器打开。
@@ -13572,11 +13580,10 @@ function openAboutSheet() {
   if (!NO_UPDATE) {
     paintAboutUpdate();
     $('aboutVerBtn').addEventListener('click', () => checkUpdate(false));
-    $('aboutLogBtn').addEventListener('click', () => {
-      const box = $('aboutLogBox');
-      if (box) box.hidden = !box.hidden;
-    });
   }
+  // 更新日志：正式版 / 测试版都开同一个内置弹层，不再内联展开。
+  const logBtn = $('aboutLogBtn');
+  if (logBtn) logBtn.addEventListener('click', openLogSheet);
   const qq = $('fbQqCopy');
   if (qq) qq.addEventListener('click', () => {
     if (wtCopy(ABOUT_QQ)) toast('群号已复制');
@@ -13603,6 +13610,37 @@ function openAboutSheet() {
   });
   // 打开就查一次：用户点进来就是想看有没有新版本。
   if (NATIVE) checkUpdate(false);
+}
+
+/**
+ * 更新日志独立弹层（2026-11-28）：从「关于」里拆出来，大标题 + 大字号全宽条目。
+ * 数据来自内置常量 BUILTIN_CHANGELOG —— 不联网，测试版也能看。
+ * 外壳仍走 openSheet 那套（#sheetMask / #sheetBody / 右上角叉），并打 .log-sheet
+ * 标记让 CSS 撑开留白（关掉时由 closeSheet 撤掉）。
+ */
+function openLogSheet() {
+  const shell = $('sheetBody').parentElement;
+  if (shell) shell.classList.add('log-sheet');
+  // 「当前版本」按真实 APP_VERSION 找，不再固定贴第一条 —— 否则 beta 装的是
+  // 1.1.0，日志第一条却是 1.0.2 时会标错。找不到就不标（如测试版临时号）。
+  const curIdx = BUILTIN_CHANGELOG.findIndex((e) => e.v === APP_VERSION);
+  const verBlocks = BUILTIN_CHANGELOG.map((entry, idx) => {
+    const groups = (entry.groups || []).map((g) =>
+      '<div class="log-gt">' + esc(g.t) + '</div>' +
+      (g.items || []).map((s) =>
+        '<div class="log-li">' + esc(s) + '</div>').join('')
+    ).join('');
+    return '<div class="log-ver-block' + (idx === curIdx ? ' log-latest' : '') + '">' +
+      '<div class="log-ver">' + esc(entry.v) +
+        (idx === curIdx ? '<span class="log-tag">当前版本</span>' : '') + '</div>' +
+      '<div class="log-date">' + esc(entry.date) + '</div>' +
+      groups +
+    '</div>';
+  }).join('');
+  $('sheetBody').innerHTML =
+    '<div class="sh-title">更新日志</div>' +
+    '<div class="log-wrap">' + verBlocks + '</div>';
+  $('sheetMask').hidden = false;
 }
 
 /** 发现新版本时的弹层：只给「去更新」一条路，不写「关闭」（上面已有叉）。 */
@@ -13694,8 +13732,7 @@ function renderPerm() {
   if (!box) return;
   const st = permApi();
   if (!st) {
-    box.innerHTML = '<p class="tip note">这一页要在装好的 App 里看。' +
-      '网页版没有系统权限这回事。</p>';
+    box.innerHTML = '<p class="tip note">请在 App 内查看。</p>';
     if ($('permFoot')) $('permFoot').hidden = true;
     return;
   }
@@ -13910,10 +13947,10 @@ function cwLoginSheet(msg) {
     'placeholder="财务处的密码">' + pwdEyeHtml('cwPwd') + '</span></label>' +
     // 密码这句要把「财务处的」也带上：账号和教务同一个，密码**不是** ——
     // 只说「默认身份证后六位」，改过教务密码的人会以为这里是教务那套。
-    '<p class="tip cwhint">财务处的，默认是身份证号后六位。</p>' +
+    '<p class="tip cwhint">默认身份证号后六位。</p>' +
     '<div class="sheetbtns"><button class="btn primary" id="cwGo">登录</button></div>' +
     '<p class="tip note' + (msg ? ' bad' : '') + '" id="cwTip">' +
-    esc(msg || '密码只存在这台手机里。') + '</p>';
+    esc(msg || '密码仅存本机。') + '</p>';
   $('sheetMask').hidden = false;
   $('cwGo').addEventListener('click', () => cwDoLogin());
   $('cwPwd').addEventListener('keydown', (e) => { if (e.key === 'Enter') cwDoLogin(); });
@@ -13997,7 +14034,7 @@ function cwOpenPay() {
 function paySheet() {
   dirSheet(
     '去平台交钱',
-    '在浏览器里打开学校缴费平台，用学号和财务处的密码登录。',
+    '在学校缴费平台用学号和财务处密码登录。',
     ['微信搜索「江西财经大学财务处」并关注',
      '点底部「学生缴费」',
      '登录后点「生活缴费」→「电费充值」',
@@ -14038,8 +14075,7 @@ async function cwBillSheet(st) {
     h += '</ul>';
     // 明细比合计少的时候要说明，别让用户以为就这些
     if (b.count > items.length) {
-      h += '<p class="tip note">还有 ' + (b.count - items.length) +
-        ' 笔在平台里没读到，去平台看全的。</p>';
+      h += '<p class="tip note">另有 ' + (b.count - items.length) + ' 笔未读到。</p>';
     }
   } else if (owed) {
     // 合计有、明细没有：只报合计，不编项目名
@@ -14157,7 +14193,7 @@ async function cwRecordsSheet(kind) {
   if (tip && r && r.more) {
     tip.hidden = false;
     tip.className = 'tip note';
-    tip.textContent = '只列出最近 10 条，更多的去平台看。';
+    tip.textContent = '只显示最近 10 条。';
   }
 }
 
@@ -14207,7 +14243,7 @@ $('dirPay').addEventListener('click', () => {
 
 $('dirFix').addEventListener('click', () => dirSheet(
   '宿舍报修',
-  '水管、门窗、灯坏了都从这里报，报完能看进度。',
+  '水管、门窗、灯具报修，可查看进度。',
   ['微信搜索「江财后勤」并关注',
    '点底部「微服务」→「在线报修」',
    '用学号登录，初始密码是六个 1',
@@ -14384,7 +14420,7 @@ $('wtDevShow').addEventListener('click', async () => {
   const n = wtHiddenCount();
   if (!n) return;
   const ok = await askConfirm('恢复 ' + n + ' 台？',
-    '它们会重新出现在列表里。', '恢复', false);
+    '将重新显示在列表中。', '恢复', false);
   if (!ok) return;
   wtUnhideAll();
   wtPaintDevs();
@@ -14406,7 +14442,7 @@ $('wtScanPaste').addEventListener('click', () => {
   wtScanStop();                       // 顺带把 onText 清掉
   if (cb) {
     openInput('粘贴二维码内容',
-      '把热水表上那个二维码里的文字粘进来（住理生活扫出来的是个链接）。',
+      '粘贴热水表二维码内容。',
       '二维码内容 / 链接', '下一步').then((v) => {
       if (v == null) return;
       const s = String(v).trim();
@@ -15057,8 +15093,8 @@ function wtAddDevStart() {
  *  不行：用户明确点了「手动输入」，再给他弹一次相机权限是答非所问。
  *  机器身上印的编号、同学发来的一串数字、二维码里的整段内容，都走这里。 */
 async function wtAddDev() {
-  const raw = await openInput('添加饮水机',
-    '机器上印的编号，或者二维码里的那串内容',
+  const raw = await openInput('添加设备',
+    '输入设备编号或粘贴二维码内容',
     '设备编号', '添加');
   if (raw == null) return;                    // 点了取消
   const id = wtNormDevice(raw);
@@ -15334,7 +15370,7 @@ function wtCopy(text) {
 /** 改名。清空再保存 = 恢复原名（服务端给的那个 / 「手动添加的饮水机」）。 */
 async function wtRenameDev(row) {
   const v = await openInput('重命名',
-    '只改本机显示，慧生活798 里的名称不变',
+    '仅改本机名称',
     '给这台起个名字', '保存', row.name || '');
   if (v == null) return;
   const name = String(v).trim().slice(0, 20);
@@ -15346,7 +15382,7 @@ async function wtRenameDev(row) {
 /** 复制编号。复制不了就把编号摊开让用户自己长按 —— 不能只说一句「失败」。 */
 async function wtCopyDev(row) {
   if (wtCopy(row.id)) { toast('已复制编号'); return; }
-  await openInput('复制编号', '长按下面这串选中，再复制', '', '好', row.id);
+  await openInput('复制编号', '长按选中后复制', '', '好', row.id);
 }
 
 /** 移除。手动加的删记录，服务端绑的只在本机隐藏。
@@ -15917,7 +15953,7 @@ async function wtExGo() {
   // 这是账号行为、会扣积分，还要真金白银地变成余额 —— 必须二次确认。
   const ok = await askConfirm('兑换积分',
     '用 ' + total + ' 积分兑换 ¥' + (total / 1000).toFixed(2)
-      + ' 到「' + w.name + '」。兑换只能提交一次，中途出错不会自动重试。',
+      + ' 到「' + w.name + '」。',
     '兑换');
   if (!ok) return;
 
@@ -17694,10 +17730,8 @@ function wtNfcCard(hex) {
   const dec = wtCardNo(up);
   $('sheetBody').innerHTML =
     '<div class="sh-title">读到一张卡</div>' +
-    '<div class="sh-sub">这是水机屏幕上那串号。' +
-      '支付宝搜「慧生活798」→ 卡包 → 添加云卡，填这串号；' +
-      '<b>最后要把卡贴到饮水机上刷一次</b>才算绑上，' +
-      '这一步需在本机完成。</div>' +
+    '<div class="sh-sub">在支付宝「慧生活798」添加云卡时填入此号，' +
+      '<b>最后把卡贴到设备上刷一次</b>即可。</div>' +
     '<div class="wt-cardno">' +
       '<div class="wt-cardno-k">机器上显示的号</div>' +
       '<div class="wt-cardno-v" id="wtCardDec">' + esc(dec) + '</div>' +
@@ -17720,7 +17754,7 @@ function wtNfcCard(hex) {
   if (copyBtn) copyBtn.addEventListener('click', async () => {
     if (wtCopy(dec)) { toast('卡号已复制'); return; }
     // 复制不了就把号摊进输入框里长按选中 —— 跟「复制编号」同一个退路。
-    await openInput('卡号', '长按下面这串选中，再复制', '', '好', dec);
+    await openInput('卡号', '长按选中后复制', '', '好', dec);
   });
 }
 
@@ -17863,8 +17897,8 @@ async function wtLogout(kind) {
   const name = one === 'device' ? '设备账号' : (one === 'score' ? '积分账号' : '登录');
   const ok = await askConfirm('退出' + name,
     one
-      ? '只清这个账号，另一个不受影响。'
-      : '只清这台手机上的登录，另一个账号不受影响。',
+      ? '仅退出当前账号。'
+      : '仅退出本机当前账号。',
     '退出');
   if (!ok) return;
   try {
@@ -18105,11 +18139,11 @@ function openAutoSheet() {
       const hasCx = /(^|,)(7101|7103)(,|$)/.test(st.jobs);
       const miss = (a.wtOn && !hasWt) || (a.cxOn && !hasCx);
       return miss
-        ? '<p class="tip note bad">系统未排任务 · 点「现在试一次」</p>'
+        ? '<p class="tip note bad">点「现在试一次」</p>'
         : '';
     })() +
     (canRun && st.notify === false
-      ? '<p class="tip note bad">通知未开，结果看不到 ' +
+      ? '<p class="tip note bad">通知未开启，' +
         '<button class="linkbtn" id="acNotify">去开启</button></p>'
       : '') +
     // 「现在试一次」是**次要动作**，做成一行小字链接（2026-11-13）。
@@ -18702,6 +18736,9 @@ function zlDevId(d) {
 function zlProg(text, bad) {
   ZL.prog = String(text || '');
   ZL.progBad = !!bad;
+  // 🔴 2026-11-28：记下时间，结论性的进度提示只显示一小会儿，
+  //    免得下次打开弹层还挂着上一次开水的「没出水」红字。
+  ZL.progAt = ZL.prog ? Date.now() : 0;
   const el = $('zlProg');
   if (!el) return;
   if (!ZL.prog) {
@@ -18933,8 +18970,10 @@ async function zlWaterStart(d) {
     });
     if (reallyRunning === false) {
       // 设备明说没在供水：不要报「成功」，给用户能做的下一步。
-      zlProg('水表确认没出水 —— 可能余额/设备状态不对，到住理 App 看一眼', true);
-      toast('水表没出水，请到住理 App 确认');
+      // 🔴 2026-11-28：措辞别再提「余额/设备状态不对」——真机上余额是够的，
+      //    这么写会误导人。只说水表没确认到出水，给一条明确的下一步。
+      zlProg('水表那边没确认到出水，看一下水表；没出水再到住理 App 确认', true);
+      toast('水表没确认到出水，请到住理 App 看一眼');
     } else {
       zlProg('开水指令已送出 · 请确认水已流出，洗完点同一颗按钮关掉');
       toast('开水指令已送出');
@@ -19190,8 +19229,7 @@ function zlCaptchaSheet(svg, phone, note) {
     $('sheetBody').innerHTML =
       '<div class="sh-title">住理要一次验证码</div>' +
       '<div class="sh-sub">' +
-        esc(note || '连着登录失败几次之后，住理会给一张图。照着图里那 4 位填进来，' +
-          '大小写都行（填错会换一张）。') +
+        esc(note || '填入图中的 4 位验证码，大小写均可。') +
       '</div>' +
       '<div class="zl-cap" id="zlCapBox">' + zlCapSvg(svg) + '</div>' +
       '<div class="zl-caprow">' +
@@ -19237,13 +19275,13 @@ function zlCaptchaSheet(svg, phone, note) {
  *  🔴 密码只在这一次用；要续期用的是 CredStore 里加密存的那一份（native.js）。 */
 async function zlLoginFlow() {
   const phone = await openInput('登录住理生活',
-    '用住理生活 App 的账号登录，只为读账单。密码不会存在手机上。',
+    '使用住理生活账号登录，密码不保存。',
     '手机号', '下一步');
   if (phone == null) return;
   const ph = String(phone).replace(/[^\d]/g, '');
   if (ph.length < 6) { toast('手机号不对'); return; }
   const pwd = await openInput('住理密码',
-    '只在这次登录时用一次，不保存。',
+    '仅用于本次登录。',
     '密码', '登录');
   if (pwd == null) return;
   if (!String(pwd)) { toast('密码不能空'); return; }
@@ -19341,7 +19379,7 @@ function zlOpenDev(d) {
 /** 记一笔。 */
 async function zlAddSpend() {
   const v = await openInput('记一笔洗澡',
-    '花了多少元。只记在这台手机上，不联网。',
+    '金额（元），仅保存在本机。',
     '例如 1.5', '记下');
   if (v == null) return;
   const amt = parseFloat(String(v).replace(/[^\d.]/g, ''));
@@ -19387,7 +19425,7 @@ function zlStartScan() {
   // 用完由 wtScanTaken / wtScanStop 清掉，不会影响「加饮水机」那条路。
   WT_SCAN.onText = async (text) => {
     const name = await openInput('给这台起个名字',
-      '洗完澡站在机器前知道是哪一台就够了。',
+      '方便区分不同设备。',
       '例如 宿舍洗漱台', '保存', zlAutoName(text));
     if (name == null) return;
     zlAddDev(text, name);
@@ -19398,7 +19436,7 @@ function zlStartScan() {
 /** 手动粘贴。先问内容、再起名字。 */
 async function zlManualAdd() {
   const raw = await openInput('记录热水码',
-    '把二维码里的那串内容粘进来，住理生活扫出来的那条也行。',
+    '粘贴二维码内容。',
     '二维码内容 / 链接', '下一步');
   if (raw == null) return;
   const s = String(raw).trim();
@@ -19502,7 +19540,10 @@ function zlPaintSheet() {
     : '';
 
   // 进度那句话：流程跑到一半被打断（重画）也还接得上。
-  const progHtml = ZL.prog
+  // 🔴 2026-11-28：只显示最近 5 分钟内的提示。上次开水的结论性红字
+  //    过一阵就没必要再挂在这儿了（用户：「这个红字描述有点奇怪吧」）。
+  const progFresh = ZL.prog && (Date.now() - (ZL.progAt || 0) < 5 * 60 * 1000);
+  const progHtml = progFresh
     ? '<p class="zl-prog' + (ZL.progBad ? ' bad' : '') + '" id="zlProg">' +
       esc(ZL.prog) + '</p>'
     : '<p class="zl-prog" id="zlProg" hidden></p>';
@@ -19546,9 +19587,9 @@ function zlPaintSheet() {
     '</div>';
   const billBody = rowsHtml || (srcRows.length
     // 有流水但今天一分没花：说清是「今天没有」，不是「一条都没有」。
-    ? '<p class="tip note">今天还没有消费记录。</p>'
-    : (sess ? '<p class="tip note">这 30 天还没有消费记录。</p>'
-            : '<p class="tip note">还没有记录。洗完点「记一笔」把金额记下来。</p>'));
+    ? '<p class="tip note">今天暂无记录。</p>'
+    : (sess ? '<p class="tip note">近 30 天暂无记录。</p>'
+            : '<p class="tip note">暂无记录，可点「记一笔」。</p>'));
 
   // —— 账号那一行（代替原来那颗占一整行的大按钮）——
   const acct = sess
@@ -19798,58 +19839,8 @@ function jumpPaintCard() {
   });
 }
 
-/** 本机认出来的取件码（U78）。30 秒缓存 —— 通知随时会来，但不必每次重画都问。 */
-function jumpCodes() {
-  const api = window.NativeApi || null;
-  if (!api || typeof api.parcels !== 'function') return [];
-  const now = Date.now();
-  if (JUMP.codesAt && now - JUMP.codesAt < 30000) return JUMP.codes || [];
-  JUMP.codesAt = now;
-  try { JUMP.codes = api.parcels() || []; } catch (e) { JUMP.codes = []; }
-  return JUMP.codes;
-}
-
-/** 一条取件码：码 + 驿站 + 多久之前。卡片和弹层共用这一份。 */
-function jumpCodeRow(r, attr) {
-  const code = String((r && r.code) || '');
-  if (!code) return '';
-  return '<div class="jump-code" ' + attr + '="' + escAttr(code) + '">' +
-    '<b>' + esc(code) + '</b>' +
-    '<i>' + esc(String((r && (r.site || r.app)) || '')) + '</i>' +
-    '<em>' + esc(agoText(Number(r && r.at) || 0)) + '</em>' +
-  '</div>';
-}
-
-/** App 名 → 跳转入口的 key（弹层里点组标题去对应 App 的待取页）。 */
-function jumpKeyOfApp(app) {
-  const map = {
-    '菜鸟': 'cainiao', '淘宝': 'express', '拼多多': 'pdd_pending',
-    '抖音': 'douyin', '京东': 'jd',
-  };
-  return map[String(app || '')] || '';
-}
-
-/** 卡片上的取件码：最多两条，点一下复制（代取时直接发给同学）。 */
-function jumpPaintCodes() {
-  const box = $('lifeJumpCodes');
-  if (!box) return;
-  const rows = jumpCodes();
-  const on = lifeOn().indexOf('jump') >= 0;
-  if (!rows.length || !on) {
-    box.hidden = true;
-    if (!rows.length) box.innerHTML = '';
-    return;
-  }
-  box.hidden = false;
-  box.innerHTML = rows.slice(0, 2).map((r) => jumpCodeRow(r, 'data-code')).join('');
-  box.querySelectorAll('[data-code]').forEach((el) => {
-    el.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      if (wtCopy(el.dataset.code)) toast('取件码已复制');
-      else toast('复制失败，长按这串码手动复制');
-    });
-  });
-}
+/* 2026-11-28：快递「通知自动读取取件码」已整套移除（用户要求删干净）。
+   快递取件 App 的快捷跳转入口保留，取件码请到各快递 App 里看。 */
 
 /** 底部那行状态：这台机器上装了哪几个快递 App。60 秒才查一次。 */
 function jumpPaintState(force) {
@@ -19878,13 +19869,6 @@ function jumpPaintState(force) {
     });
     JUMP.text = n ? '● 已装 ' + n + ' 个快递 App' : '● 没检测到快递 App，点开会走网页';
   }
-  // U78：能读到取件码就报件数（这比「装了几个 App」有用）；没授权就说怎么开。
-  const codes = jumpCodes();
-  if (codes.length) {
-    JUMP.text = '● ' + codes.length + ' 件待取 · 通知里认出来的';
-  } else if (api && typeof api.parcelsPerm === 'function' && api.parcelsPerm() === '0') {
-    JUMP.text = '● 开通知读取，自动认取件码';
-  }
   // U87：「有 App 但没通知」和「没装 App」在卡片上看着差不多，诊断里分开写。
   diagSet('jump', true, String(JUMP.text || '').replace(/^●\s*/, ''));
   const st = $('lifeJumpState');
@@ -19900,40 +19884,9 @@ function jumpPaintState(force) {
  */
 function openJumpSheet() {
   const list = JUMP_ENTRIES.filter((e) => e.key !== 'cainiao');
-  const codes = jumpCodes();
-  const api = window.NativeApi || null;
-  const permApi = !!(api && typeof api.parcelsPerm === 'function');
-
-  // 弹层顶部先摆待取的码（U79）：用户要「点开对应软件选项，能看到代取快递、
-  // 号码、驿站」⇒ 按 App 分组，组标题右边直接给一个「打开」。
-  let top = '';
-  if (codes.length) {
-    const order = ['拼多多', '淘宝', '菜鸟', '抖音', '京东', '微信'];
-    const by = {};
-    codes.forEach((r) => {
-      const k = String((r && r.app) || '快递');
-      (by[k] = by[k] || []).push(r);
-    });
-    const names = order.filter((n) => by[n])
-      .concat(Object.keys(by).filter((n) => order.indexOf(n) < 0));
-    top = '<div class="jump-groups">' + names.map((n) => {
-      const k = jumpKeyOfApp(n);
-      return '<div class="jump-group">' +
-        '<div class="jg-hd"><b>' + esc(n) + '</b>' +
-          '<span>' + by[n].length + ' 件待取</span>' +
-          (k ? '<button type="button" class="jg-go" data-japp="' + escAttr(k) +
-               '">打开 ›</button>' : '') +
-        '</div>' +
-        by[n].map((r) => jumpCodeRow(r, 'data-jcode')).join('') +
-      '</div>';
-    }).join('') + '</div>';
-  } else if (permApi && api.parcelsPerm() === '0') {
-    top = '<button type="button" class="jump-perm" id="jumpPerm">' +
-      '开启通知读取，自动认取件码 ›</button>';
-  }
 
   $('sheetBody').innerHTML =
-    '<div class="sh-title">快递取件</div>' + top +
+    '<div class="sh-title">快递取件</div>' +
     '<div class="jump-list">' + list.map((e) =>
       '<button type="button" class="jump-row" data-jkey="' + escAttr(e.key) + '">' +
         '<span class="j-tt"><b>' + esc(e.name) + '</b>' +
@@ -19946,22 +19899,6 @@ function openJumpSheet() {
   $('sheetBody').querySelectorAll('[data-jkey]').forEach((b) => {
     b.addEventListener('click', () => jumpGo(jumpEntry(b.dataset.jkey)));
   });
-  $('sheetBody').querySelectorAll('[data-jcode]').forEach((b) => {
-    b.addEventListener('click', () => {
-      if (wtCopy(b.dataset.jcode)) toast('取件码已复制');
-      else toast('复制失败，长按这串码手动复制');
-    });
-  });
-  $('sheetBody').querySelectorAll('[data-japp]').forEach((b) => {
-    b.addEventListener('click', () => jumpGo(jumpEntry(b.dataset.japp)));
-  });
-  const perm = $('sheetBody').querySelector('#jumpPerm');
-  if (perm) {
-    perm.addEventListener('click', () => {
-      api.parcelsAsk();
-      toast('在列表里勾上「酱菜通」，之后再收到取件通知就会自动记下来');
-    });
-  }
   const done = $('sheetBody').querySelector('#jumpDone');
   if (done) done.addEventListener('click', closeSheet);
 }
@@ -20617,21 +20554,9 @@ function renderLifeWidgets() {
     ? (String(jd.elec.bal) + (jd.elec.unit ? ' ' + jd.elec.unit : '')) : '—';
   const jn2 = $('lifeJfNet');
   if (jn2) jn2.textContent = (jd && jd.net && jd.net.expire) ? String(jd.net.expire) : '—';
-  // 快递取件：先把「装了哪几个 App」查好（60 秒节流），下面统一写状态字。
-  // U79：进生活页先让原生扫一遍**通知栏里还挂着**的通知（节流 30 秒）——
-  //      光等新通知会让人觉得「开了权限也没用」。
-  const japi = window.NativeApi || null;
-  if (japi && typeof japi.parcelsScan === 'function') {
-    const jn = Date.now();
-    if (!JUMP.scanAt || jn - JUMP.scanAt > 30000) {
-      JUMP.scanAt = jn;
-      japi.parcelsScan();
-      JUMP.codesAt = 0;          // 扫完立刻重读，不然还是旧的那份
-    }
-  }
+  // 快递取件：把「装了哪几个 App」查好（60 秒节流），下面统一写状态字。
   jumpPaintState();
-  // U78：取件码 + 住理「供水中」的整卡高亮 —— 两张卡的专属记号都在这儿落。
-  jumpPaintCodes();
+  // 住理「供水中」的整卡高亮。
   const zw = $('lifeZlWidget');
   if (zw) zw.classList.toggle('live', !!zlLive());
   LIFE_WIDGETS.forEach((w) => {
@@ -20674,7 +20599,7 @@ function openLifeWidgetsSheet() {
   const on = lifeOn();
   $('sheetBody').innerHTML =
     '<div class="sh-title">组件</div>' +
-    '<div class="sh-sub">不用的取消勾选，生活页就只留下你要的卡片。</div>' +
+    '<div class="sh-sub">取消勾选即可隐藏对应卡片。</div>' +
     '<div class="picklist">' + LIFE_WIDGETS.map((w) =>
       '<button type="button" class="pickopt' + (on.indexOf(w.id) >= 0 ? ' on' : '') +
       '" data-life="' + w.id + '"><span class="t">' + esc(w.name) + '</span>' +
@@ -21860,6 +21785,61 @@ function bgStart() {
     if (BG_JOB && BG_JOB.out) { clearInterval(keep); return; }
     bgStep();
   }, 2500);
+}
+
+/* ================= U95⑦ AI 助手：注册工具实现（2026-11-28）=================
+ * 只在这里把「模型要调的工具」接到已有数据链。ai.js 负责对话和白名单，
+ * 这里负责真查 / 引导，两边不互相依赖。
+ * 🔴 隐私：工具返回给模型的文本里**只有它要的最小字段** —— 课表只发课程名、
+ *    节次、教室；电费只发金额数字。账号、一卡通号、登录凭据一律不发。
+ */
+if (window.AI && typeof AI.registerTools === 'function') {
+  AI.registerTools({
+    get_schedule: (args) => {
+      try {
+        const week = currentWeek();
+        const occ = occupancy(week);
+        // 用户说「周三」就查周三，没说查今天；只按星期几，不按日期。
+        const want = String((args && args.day) || '').trim();
+        let di = (new Date().getDay() + 6) % 7;   // 今天，0=周一
+        const mm = /^周([一二三四五六日天])/.exec(want);
+        if (mm) di = '一二三四五六日'.indexOf(mm[1] === '天' ? '日' : mm[1]);
+        if (di < 0 || di > 6) return { text: '星期没认出来，请说「周三」这样。' };
+        const rows = [];
+        for (let p = 0; p < (curTT().unitCount || 10); p++) {
+          const here = occ[di + ':' + p];
+          if (!here || !here.length) continue;
+          const parts = here.map((c) => {
+            const room = String(c.room || '').trim();
+            return (c.name || '') + (room ? '（' + room + '）' : '');
+          });
+          rows.push('第' + (p + 1) + '节 ' + parts.join('、'));
+        }
+        return { text: rows.length ? rows.join('；') : ('周' + DAY_CN[di] + '没有课。') };
+      } catch (e) { return { text: '课表还没同步，先去同步教务处数据。' }; }
+    },
+
+    get_electricity: async () => {
+      try {
+        const acc = (store.get(KEY.jfAcc) || '').trim();
+        if (!acc) return { text: '还没填一卡通号，先去智慧江财页填一下。' };
+        const r = await api('/api/jf/query', { acc: acc, roomId: (jfRoom() || {}).id || 0 });
+        if (!r || !r.ok) return { text: '电费没查到，去智慧江财页看看。' };
+        // 只发金额数字，不发账号 / 房间号。
+        const bal = (r.data && (r.data.balance != null ? r.data.balance : r.data.kwh));
+        return { text: (bal != null ? ('宿舍还剩 ' + bal + ' 度电。') : '电费查到了，具体数值去智慧江财页看。') };
+      } catch (e) { return { text: '电费暂时查不到，稍后再试。' }; }
+    },
+
+    // 🔴 开水 / 签到是高危操作：现有实现都是「选设备 / 选课 + 长按确认」的完整流程，
+    //    AI 这边不偷偷执行，只把人引导到对应页面自己点 —— 这也符合「高危要本人同意」。
+    open_water: () => ({
+      text: '开热水要连你宿舍的水表，请在「生活 → 住理生活」里点开热水按钮操作，我不能直接替你开。'
+    }),
+    submit_signin: () => ({
+      text: '签到要在「学习」页点具体的那一门课的签到，我不能直接替你提交。'
+    })
+  });
 }
 
 if (BG_MODE) bgStart();

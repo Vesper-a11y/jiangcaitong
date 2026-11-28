@@ -31,75 +31,20 @@ public class DingListener extends NotificationListenerService {
     private static final String EXTRA_CONV = "android.conversationTitle";
     private static final String EXTRA_TITLE_BIG = "android.title.big";
 
-    /** 还活着的监听实例。系统绑定后才有值；NativeBridge 借它主动扫通知栏。 */
-    private static DingListener LIVE;
-
     @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
         handle(sbn);
     }
 
-    /**
-     * 主动读通知栏里**还挂着**的通知（2026-11-24 U79）。
-     *
-     * 用户：「开了通知之后也不会直接读取啊，我想要的是直接读取」——
-     * 光靠 onNotificationPosted 只能等**下一条**推送；而取件通知通常还挂在
-     * 通知栏里没被划掉。getActiveNotifications() 正是读这一批，所以用户
-     * 刚授权 / 刚打开生活页时就能立刻看到号码，不必等到明天。
-     */
-    void scanActive() {
-        StatusBarNotification[] arr = null;
-        try {
-            arr = getActiveNotifications();
-        } catch (Throwable ignored) {
-            // 没有权限 / 系统实现不给：当没有，下次再来。
-        }
-        if (arr == null) return;
-        for (int i = 0; i < arr.length; i++) handle(arr[i]);
-    }
-
-    /** 给 NativeBridge 调的入口（实例可能还没绑上，那就什么都不做）。 */
-    static void scanNow() {
-        DingListener d = LIVE;
-        if (d == null) return;
-        try { d.scanActive(); } catch (Throwable ignored) { }
-    }
-
     @Override
     public void onListenerConnected() {
-        LIVE = this;
-        try { scanActive(); } catch (Throwable ignored) { }
+        // 连接成功不用做事：钉钉通知靠 onNotificationPosted 实时收。
     }
 
     private void handle(StatusBarNotification sbn) {
         try {
             if (sbn == null) return;
             String pkg = sbn.getPackageName();
-
-            // 快递取件码（2026-11-24 U78）：和钉钉共用这一条「通知使用权」，
-            // 不另开一个 service —— 系统只给一个开关，多一个只会让用户勾两次。
-            // 🔴 同样先比包名：白名单外的连 extras 都不取（见类注释的隐私边界）。
-            if (!Parcels.appOf(pkg).isEmpty()) {
-                Notification kn = sbn.getNotification();
-                if (kn != null && kn.extras != null) {
-                    Bundle kb = kn.extras;
-                    String kt = str(kb.getCharSequence(Notification.EXTRA_TITLE));
-                    String kx = str(kb.getCharSequence(Notification.EXTRA_BIG_TEXT));
-                    if (kx.isEmpty()) kx = str(kb.getCharSequence(Notification.EXTRA_TEXT));
-                    if (kx.isEmpty()) kx = str(kn.tickerText);
-                    if (kx.isEmpty()) kx = str(kb.getCharSequence(Notification.EXTRA_SUB_TEXT));
-                    CharSequence[] kl = kb.getCharSequenceArray(Notification.EXTRA_TEXT_LINES);
-                    if (kl != null) {
-                        StringBuilder sb = new StringBuilder(kx);
-                        for (int i = 0; i < kl.length; i++) {
-                            if (kl[i] != null) sb.append(' ').append(kl[i]);
-                        }
-                        kx = sb.toString();
-                    }
-                    Parcels.feed(getApplicationContext(), pkg, kt, kx);
-                }
-                return;
-            }
 
             String src = Ding.srcOf(pkg);
             if (src == null) return;
@@ -137,7 +82,6 @@ public class DingListener extends NotificationListenerService {
      */
     @Override
     public void onListenerDisconnected() {
-        if (LIVE == this) LIVE = null;
         try {
             super.onListenerDisconnected();
         } catch (Throwable t) {

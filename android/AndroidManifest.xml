@@ -290,24 +290,12 @@
              meta-data 指向 res/xml/jct_widget_info.xml（尺寸、刷新周期、初始布局）。
              🔴 资源名写错不会有任何提示：桌面上加小组件时那一项直接不出现，
                 或者加上了是一片空白。改完记得真机加一次看看。 -->
-        <receiver
-            android:name=".WidgetProvider"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/jct_widget_info" />
-        </receiver>
-
-        <!-- ===== 另外三个尺寸（0.52.0 v12）=====
-             🔴 一个类只能挂一个 receiver，所以每个尺寸都得有自己的类。
-                那三个类都是空的，画法在 WidgetProvider 里按类分派
-                （kindOf），改画法不用改这里。
-             🔴 四个 receiver 的 meta-data 指向**四个不同的 xml**：
-                指同一个的话，四个尺寸会全变成同一个大小（系统读的是
-                provider 的元数据，不是 receiver 的名字）。 -->
+        <!-- ===== 桌面小组件：只保留 2×2（2026-11-28 用户要求）=====
+             以前有 4×2 / 4×1 / 4×4 四种，用户说「只留一个 2×2 就行」，
+             于是删掉另外三个 receiver。系统加小组件时只列注册过的 receiver，
+             没注册的尺寸根本不会出现 —— 不用去改资源或隐藏。
+             🔴 WidgetSmall 继承 WidgetProvider，画法在那份基类的 buildSmall()；
+                meta-data 指向 jct_widget_info_small.xml（尺寸、刷新周期、初始布局）。 -->
         <receiver
             android:name=".WidgetSmall"
             android:exported="false">
@@ -317,28 +305,6 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/jct_widget_info_small" />
-        </receiver>
-
-        <receiver
-            android:name=".WidgetStrip"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/jct_widget_info_strip" />
-        </receiver>
-
-        <receiver
-            android:name=".WidgetLarge"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/jct_widget_info_large" />
         </receiver>
     </application>
 </manifest>

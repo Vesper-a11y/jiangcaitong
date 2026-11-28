@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.jxufe.jiangcaitong",
     "vendor": "hobson",
-    "versionCode": 3,
-    "versionName": "1.0.2",
+    "versionCode": 5,
+    "versionName": "1.0.3",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }
