@@ -378,7 +378,13 @@ public class ZhuliBle {
                 if (closedByUs) return;
                 if (!ready) {
                     retry(g.getDevice());
+                    return;
                 }
+                // U95②：连上之后**意外掉线**（不是我们主动关），原来什么都不做，
+                // JS 只能干等到 12 秒超时才知道出事。这里立刻报错，让 JS 走收尾
+                // （关水 / 提示），少等十几秒，也不会误报成「开水成功」。
+                ready = false;
+                fail("蓝牙中途断了 —— 站近一点，别锁屏，再试一次");
             }
         }
 
