@@ -1125,6 +1125,13 @@ body::after {
 .row:last-child { border-bottom: 0; }
 .row.tap:active { background: var(--line); }
 .row .k { color: var(--text); flex: 0 0 auto; }
+/* U119：行标题下面挂一行小字（「插件市场」下面那句「需要魔法才能打开」）。
+   左对齐两行、右边状态照旧贴右；只多 ~15px 高，44px 的下限仍够。 */
+.row .k2 { display: flex; flex-direction: column; gap: 1px; align-items: flex-start; }
+.row .k2 i {
+  font-style: normal; font-size: 12px; line-height: 1.3;
+  color: var(--sub); font-weight: 400;
+}
 .row .v { color: var(--sub); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .v.muted { color: var(--sub); font-size: 13px; }
 .rowend { display: flex; align-items: center; gap: 4px; min-width: 0; }
@@ -2427,6 +2434,82 @@ body::after {
 .pickopt.exf-child { padding-left: 26px; font-size: 14px; }
 .pickopt.exf-parent { font-weight: 600; }
 .exf-div { height: .5px; background: var(--line); margin: 6px 4px; }
+
+/* ---- 生活页组件库（2026-11-28 U117）----
+   一行一个组件：左边名字 + 一句话说明，右边一颗「下载 / 删除」。
+   🔴 「删除」用描边浅字，「下载」用实心主色 —— 一屏里只留一个想让人点的，
+      不然容易顺手点掉。 */
+.wstore { display: flex; flex-direction: column; margin: 2px -4px 2px; }
+.wstore-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 4px; border-bottom: .5px solid var(--line);
+}
+.wstore-row:last-child { border-bottom: 0; }
+.wstore-tx { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.wstore-tx b { font-size: 15px; font-weight: 600; color: var(--text); }
+.wstore-tx i {
+  font-style: normal; font-size: 12px; color: var(--sub); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.wstore-btn {
+  flex: 0 0 auto; height: 30px; padding: 0 15px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: var(--accent); color: #fff;
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.wstore-btn:active { opacity: .86; }
+.wstore-btn.del {
+  background: transparent; color: var(--sub);
+  border-color: var(--line); font-weight: 500;
+}
+.wstore-btn.del:active { background: var(--line); }
+
+/* ---- 插件市场（2026-11-28 U118 / U119 独立成页）----
+   U118 时是一行一个（套底部弹层），U119 用户给了参考图：
+   「整个界面应该单独做一个……插件就是一块一块的，上面显示提交人以及提交时间」。
+   ⇒ 列表改成一张张卡，卡里顺序固定：名字 + 标签 → 谁提交的 · 哪天 →
+     一句话说明 → 版本和按钮。按钮仍用组件库那套 .wstore-btn（一屏里只留一个想点的）。
+   🔴 卡片背景用 --card / --card-grad，和 .lifew 完全同一套 —— 换主题时不会有一块
+      白得发光。 */
+.plg-list { display: block; }
+.plg-card {
+  border-radius: 18px; padding: 14px 16px 12px; margin-bottom: 12px;
+  background: var(--card); background-image: var(--card-grad);
+  box-shadow: var(--shadow-card);
+}
+.plg-hd { display: flex; align-items: center; gap: 8px; }
+.plg-hd b {
+  font-size: 16px; font-weight: 600; color: var(--text); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.plg-tag {
+  flex: 0 0 auto; font-size: 11px; line-height: 1.5; padding: 1px 7px;
+  border-radius: 999px; background: var(--line); color: var(--sub);
+}
+.plg-mark { flex: 0 0 auto; margin-left: auto; font-size: 11px; color: var(--sub); }
+.plg-mark.up { color: var(--accent); font-weight: 600; }
+.plg-mark.off { color: var(--sub); }
+/* 提交人 + 时间：用户点名要「上面显示」。12px 灰字，跟着标题走。
+   头衔（作者）做成一个小胶囊：它比帐号重要，但不该比插件的名字更响。 */
+.plg-by { margin-top: 3px; font-size: 12px; color: var(--sub); }
+.plg-role {
+  display: inline-block; margin-left: 5px; padding: 0 5px;
+  border-radius: 999px; background: var(--accent); color: #fff;
+  font-size: 10px; line-height: 16px; font-weight: 600; vertical-align: 1px;
+}
+.plg-at { color: var(--sub); }
+.plg-desc {
+  margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: var(--text);
+  opacity: .8;
+}
+.plg-btm { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.plg-ver { flex: 1 1 auto; font-size: 11px; color: var(--sub); }
+.plg-acts { display: flex; gap: 8px; flex: 0 0 auto; align-items: center; }
+.wstore-btn[disabled] { opacity: .55; }
+.plg-wait { padding: 40px 4px; text-align: center; font-size: 13px; color: var(--sub); }
+/* 「我也做一个」（U119）：整行主色按钮，放在列表最下面。 */
+.plg-add { margin: 18px 0 6px; }
 
 /* 隐藏课程 */
 .sh-hide {
@@ -4374,6 +4457,97 @@ body::after {
    可它说的是「有没有要签的」—— 一件要么有、要么没有的事，
    比下面那三条待办轻。压完是 88px，标题缩到 13px，
    和列表标题（「3 条要交」）拉开一档。 */
+/* ---- 学习页顶部「正在签到」（2026-11-28 U121）----
+   一条整宽的主色条，只在真有「没签、还能签」的签到时出现。
+   🔴 配色跟 .btn.primary 同一套（accent-grad + primary-ink）：
+      换主题、深色模式下不用另配，也不会出现白底白字。
+   🔴 只给「现在」用：签到窗口通常 5~15 分钟，这条要能被一眼扫到，
+      所以用主色实心，而不是和卡片一样的白底 —— 它是一句提醒，不是一张卡。 */
+.cx-signbar {
+  display: flex; align-items: center; gap: 8px;
+  margin: 6px 16px 10px; padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--accent-grad); color: var(--primary-ink);
+  box-shadow: var(--accent-glow);
+  font-size: 13px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.cx-signbar[hidden] { display: none; }
+.cx-signbar:active { opacity: .88; }
+.cx-signbar-hd {
+  flex: 0 0 auto; font-size: 11px; font-weight: 700; letter-spacing: .5px;
+  opacity: .82;
+}
+.cx-signbar-tx {
+  flex: 1 1 auto; min-width: 0; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cx-signbar-lt { flex: 0 0 auto; font-size: 11px; opacity: .85; }
+.cx-signbar-go {
+  flex: 0 0 auto; width: 14px; height: 14px;
+  fill: none; stroke: currentColor; stroke-width: 2.2;
+}
+
+/* ---- 签到整页（2026-11-28 U122）----
+   用户：「把签到页和学习通还有中国大学 MOOC 并列」—— 从三级药丸提拔成
+   一级视图，自己一整页。层次只有两层：
+     正在签（一场一张卡，主色按钮「去签到」）/ 最近的签到（一张卡一批行）。
+   🔴 除按钮外不用主色铺底：学习通那一页的签到卡是卡里的一小块，
+      这里整页都是签到，再铺主色就变成一堵墙，看两眼就累。
+   🔴 那个会呼吸的小红点只给「正在签」用 —— 签到窗口通常 5~15 分钟，
+      这一页存在的意义就是让人一眼看出「现在亮着」。 */
+.sg-scan {
+  display: flex; align-items: center; gap: 7px;
+  margin: 0 4px 8px; font-size: 12px; color: var(--sub);
+}
+.sg-live { padding: 13px 16px 15px; }
+.sg-live-hd {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--danger);
+}
+.sg-live-hd b { font-weight: 700; letter-spacing: .3px; }
+.sg-dot {
+  flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--danger-fill);
+  animation: sgPulse 1.6s var(--ease-soft) infinite;
+}
+@keyframes sgPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .45; transform: scale(.82); }
+}
+.sg-left { margin-left: auto; font-weight: 600; color: var(--danger); }
+.sg-course {
+  margin-top: 5px; font-size: 17px; font-weight: 650; line-height: 1.3;
+  color: var(--text);
+  /* 课名可能很长（「毛泽东思想和中国特色社会主义理论体系概论」）。
+     两行封顶，不截断成一行 —— 半个课名认不出是哪门课。 */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.sg-meta { margin-top: 3px; font-size: 12px; color: var(--sub); }
+.sg-go { margin-top: 12px; }
+/* U123：按钮文案统一成「去签到」后，进不去那一场的那张卡靠这行小字交代原因。
+   居中、浅灰、贴着按钮 —— 它解释的是按钮，不该看着像卡片正文。
+   原来这里的 .sg-note 是 U122 换按钮时留下的死样式，就地改名复用。 */
+.sg-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.4; color: var(--sub); text-align: center; }
+.sg-idle { padding: 16px; }
+.sg-idle b { font-size: 15px; font-weight: 600; color: var(--text); }
+.sg-idle p { margin: 6px 0 0; }
+.sg-hist { padding: 9px 16px 8px; }
+.sg-hd { display: flex; align-items: baseline; gap: 8px; padding-bottom: 1px; }
+.sg-hd b { font-size: 13px; font-weight: 600; color: var(--text); }
+.sg-hd i { font-size: 11px; font-style: normal; color: var(--sub); }
+/* 手动重查：这一页数据最讲究「现在」，得留一个人能按的出口。
+   🔴 不做成 .btn：它是一次补充，不是这一页的主任务。 */
+.sg-refresh {
+  display: block; width: 100%; margin: 0 0 6px; padding: 10px 0;
+  background: none; border: 0; font-family: inherit;
+  font-size: 13px; color: var(--accent); cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.sg-refresh:active { opacity: .6; }
+@media (prefers-reduced-motion: reduce) { .sg-dot { animation: none; } }
+
 .cx-signcard { padding: 8px 16px; margin: 0 0 10px; }
 .cx-signhd {
   display: flex; align-items: baseline; gap: 8px;
@@ -4687,6 +4861,17 @@ body::after {
    数据是内置的，测试版也看得到。全部走主题变量，换主题跟着变。 */
 .log-sheet { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
 .log-sheet .sh-title { margin-bottom: 14px; }
+/* 🔴 2026-11-28 U127：用户「这个知道了都不在一个图层」。
+   .sheetbtns 默认是 sticky 贴底（给内容超长的弹层用），而这一页里
+   .log-wrap 又自带内层滚动 —— 两个滚动容器叠在一起，按钮就浮在文字上面，
+   下面还漏出一行字，看着像另一个图层。
+   升级弹窗改成 **固定高度 + flex 一列**：标题 / 内容（自己滚）/ 按钮，
+   三段各占各的位置，按钮不再 sticky、不再盖住任何文字。
+   🔴 高度必须定死：父容器高度为 auto 时 flex:1 收缩不了子项，内层照样撑破，
+      又会退回原来那个样子。 */
+.wn-sheet { display: flex; flex-direction: column; height: 76%; }
+.wn-sheet .log-wrap { flex: 1 1 auto; min-height: 0; max-height: none; }
+.wn-sheet .sheetbtns { position: static; padding-top: 12px; }
 .log-wrap { max-height: 66vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .log-ver-block { padding: 4px 0 18px; }
 .log-ver-block + .log-ver-block {
@@ -5498,6 +5683,19 @@ body::after {
   background: var(--card); background-image: var(--card-grad);
   box-shadow: var(--shadow-card);
 }
+/* ===== 插件自己排版的卡（2026-11-28 U130）=====
+   插件交一段 HTML 自己画，宿主只留外壳：白底、圆角、投影、圆角剪切。
+   外壳的 padding 和左侧那道彩条让给插件 —— 它要画整张卡，留白自己说了算
+   （默认给 14/16 的留白，插件在自己的 CSS 里改 .plgv 就能覆盖）。 */
+.lifew.lifew-custom { padding: 0; overflow: hidden; }
+.lifew.lifew-custom::before { display: none; }
+.lifew-custom .plgv { padding: 14px 16px; }
+.lifew-custom .plgv-err { font-size: 13px; color: var(--sub); }
+/* ===== 插件自己那一页（2026-11-28 U130）=====
+   整页由插件画，App 只提供这块留白。左右 16px 已经由 .scroll 给了，
+   这里只补顶部那一点（页面标题下面不留空会显得挤着）。 */
+.plgpg { padding-top: 4px; }
+.plgpg-err { font-size: 13px; color: var(--sub); }
 /* 🔴 2026-11-24 U68：无组件时的参考 UI（房子图标 / 标题 / 一句话）。 */
 .lifew-empty {
   border-radius: 18px; padding: 34px 16px 30px;
@@ -6309,12 +6507,23 @@ body.life-sorting .lifew.swapping {
 }
 .ai-msgs { flex: 1 1 auto; overflow-y: auto; padding: 14px; -webkit-overflow-scrolling: touch; }
 .ai-empty { text-align: center; color: var(--sub); font-size: 13px; line-height: 1.8; padding-top: 40px; }
-.ai-bub {
-  max-width: 86%; margin-bottom: 12px; padding: 9px 12px;
-  border-radius: 12px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+/* U105：微信 / QQ 那种气泡 —— 按内容宽度收缩，不再占满一整行的长条。 */
+.ai-row { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 12px; }
+.ai-row.me { flex-direction: row-reverse; }
+.ai-av {
+  flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600;
 }
-.ai-me { margin-left: auto; background: var(--accent); color: var(--primary-ink); border-bottom-right-radius: 3px; }
-.ai-bot { background: var(--card); color: var(--text); border: 1px solid var(--line); border-bottom-left-radius: 3px; }
+.ai-av.me { background: var(--accent-soft); color: var(--sub); }
+.ai-av.bot { background: var(--accent); color: var(--primary-ink); }
+.ai-bub {
+  width: fit-content; max-width: 72%; padding: 9px 12px;
+  border-radius: 16px; font-size: 14px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+}
+.ai-me { background: var(--accent); color: var(--primary-ink); border-bottom-right-radius: 4px; }
+.ai-bot { background: var(--card); color: var(--text); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .ai-typing { opacity: .6; }
 .ai-input {
   display: flex; gap: 8px; align-items: center;
@@ -6379,6 +6588,13 @@ body.life-sorting .lifew.swapping {
   background: var(--accent-soft); color: var(--sub); font: inherit; font-size: 14px;
 }
 .ai-set-btns button.on { background: var(--accent); color: var(--primary-ink); font-weight: 600; }
+/* U104：清空对话记录单独一行，不挤进上面三个按钮；对话界面保持原样不加东西。 */
+.ai-set-clear-chat {
+  width: 100%; height: 38px; margin-top: 10px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: none; color: var(--sub); font: inherit; font-size: 13px;
+}
+.ai-set-clear-chat:active { opacity: .7; }
 /* 模型二选一：V4.1 Flash（默认）/ 旧版。选中态用主题色描边，跟其它选中控件一致。 */
 .ai-model-pick { display: flex; flex-direction: column; gap: 8px; }
 .ai-model-opt {

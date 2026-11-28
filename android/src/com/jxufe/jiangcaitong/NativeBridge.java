@@ -1,13 +1,19 @@
 package com.jxufe.jiangcaitong;
 
 import android.app.AlarmManager;
+import android.app.DownloadManager;
 import android.app.NotificationManager;
 import android.app.job.JobScheduler;
 import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -1265,6 +1271,127 @@ public class NativeBridge {
         } catch (Throwable t) {
             // 没有浏览器 / 被系统拦了：静默失败。界面那边本来就给了下载页兜底，
             // 这里再弹一个 Java 异常框只会更糟。
+        }
+    }
+
+    /**
+     * 下载更新包（2026-11-28 U125）：自己下、自己起名、下完直接拉起安装器。
+     *
+     * 🔴 为什么不再交给浏览器：Gitee 的附件 CDN 不管文件是什么，一律回
+     *    `Content-Type: application/zip`（2026-11-28 实测），文件名却是 .apk。
+     *    手机下载器按类型判断，就把后缀补成 .zip —— 用户下完得到「一个压缩包」，
+     *    点开也装不上。国内网络读不到 GitHub、自动落到 Gitee 备援的人躲不开这一步。
+     *
+     * 现在名字和类型都在这里写死，服务端返回什么类型都不再影响结果。
+     *
+     * 🔴 任何一步失败都返回 "fail"，界面会退回原来的「浏览器打开」——
+     *    最坏也只是回到旧行为，绝不能变成「点了更新没反应」。
+     */
+    @JavascriptInterface
+    public String downloadApk(final String url, final String fileName) {
+        if (url == null || fileName == null) return "fail";
+        final String u = url.trim();
+        final String name = fileName.trim();
+        if (!(u.startsWith("http://") || u.startsWith("https://"))) return "fail";
+        if (!name.matches("jiangcaitong-[0-9]+(\\.[0-9]+){0,2}\\.apk")) return "fail";
+        Context ctx;
+        try {
+            ctx = web.getContext().getApplicationContext();
+        } catch (Throwable t) {
+            return "fail";
+        }
+        if (ctx == null) return "fail";
+        try {
+            File f = new File(ApkProvider.dir(ctx), name);
+            // 同版本再下一次：先删旧的，否则下载器会改名叫「xxx (1).apk」，
+            // 而安装器要的那条路径还在旧文件上。
+            if (f.exists() && !f.delete()) return "fail";
+            DownloadManager dm =
+                    (DownloadManager) ctx.getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm == null) return "fail";
+            DownloadManager.Request req = new DownloadManager.Request(Uri.parse(u));
+            req.setMimeType(ApkProvider.MIME);
+            req.setTitle("酱菜通更新");
+            req.setDescription("正在下载，完成后会弹安装");
+            // 下载器自己也会挂一条通知：我们拉不起安装器时（Android 10 起
+            // 后台不允许启动页面），用户点那条通知一样能装。这是最后一道兜底。
+            req.setNotificationVisibility(
+                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            req.setDestinationInExternalFilesDir(ctx, Environment.DIRECTORY_DOWNLOADS, name);
+            long id = dm.enqueue(req);
+            ctx.getSharedPreferences(APK_PREFS, Context.MODE_PRIVATE).edit()
+                    .putLong("id", id).putString("name", name).apply();
+            listenApkDone(ctx);
+            return "ok";
+        } catch (Throwable t) {
+            return "fail";
+        }
+    }
+
+    private static final String APK_PREFS = "jct_apk";
+    private static BroadcastReceiver apkDoneReceiver = null;
+
+    /** 下载完成的通知只注册一次（Application context，跟着进程活）。 */
+    private void listenApkDone(final Context ctx) {
+        if (apkDoneReceiver != null) return;
+        apkDoneReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent it) {
+                try {
+                    long id = it.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L);
+                    SharedPreferences p = c.getSharedPreferences(APK_PREFS, Context.MODE_PRIVATE);
+                    // 不是我们这一单（用户自己在别处下的）：不接。
+                    if (id <= 0 || id != p.getLong("id", -1L)) return;
+                    String name = p.getString("name", "");
+                    p.edit().remove("id").apply();
+                    if (!apkDownloadedOk(c, id)) return;   // 失败/取消：通知栏已说明
+                    installApk(c, name);
+                } catch (Throwable t) {
+                    // 静默：系统下载器那条通知还在，点了照样能装。
+                }
+            }
+        };
+        try {
+            IntentFilter f = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+            if (Build.VERSION.SDK_INT >= 33) {
+                // Android 13 起必须显式声明这枚广播的来源，否则注册直接抛。
+                ctx.registerReceiver(apkDoneReceiver, f, Context.RECEIVER_EXPORTED);
+            } else {
+                ctx.registerReceiver(apkDoneReceiver, f);
+            }
+        } catch (Throwable t) {
+            apkDoneReceiver = null;
+        }
+    }
+
+    private boolean apkDownloadedOk(Context c, long id) {
+        DownloadManager dm = (DownloadManager) c.getSystemService(Context.DOWNLOAD_SERVICE);
+        if (dm == null) return false;
+        Cursor cur = null;
+        try {
+            cur = dm.query(new DownloadManager.Query().setFilterById(id));
+            if (cur == null || !cur.moveToFirst()) return false;
+            int st = cur.getInt(cur.getColumnIndex(DownloadManager.COLUMN_STATUS));
+            return st == DownloadManager.STATUS_SUCCESSFUL;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (cur != null) cur.close();
+        }
+    }
+
+    /** 拉起系统安装器。走 ApkProvider 的 content:// —— Android 7 起 file:// 会被拒。 */
+    private void installApk(Context c, String name) {
+        File f = ApkProvider.fileOf(c, name);
+        if (f == null || !f.isFile() || f.length() <= 0) return;
+        Intent i = new Intent(Intent.ACTION_VIEW);
+        i.setDataAndType(ApkProvider.uriFor(name), ApkProvider.MIME);
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            c.startActivity(i);
+        } catch (Throwable t) {
+            // Android 10 起后台启动页面会被静默拦下。不补自己的通知：
+            // 下载器那条「下载完成」就在通知栏，点它一样进安装器。
         }
     }
 

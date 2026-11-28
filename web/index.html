@@ -18,10 +18,14 @@
        文档是 file:// 源，`'self'` 匹配不到 file:，不带这一项调试时脚本全被挡。
        APK 里页面跑在 https://app.local，走的是 `'self'`。
      · 不放 `'unsafe-inline'`、不放 `data:`：那正是我们要挡的两种注入。
+     · 🔴 2026-11-28 U118 唯一一次例外：script-src 加了 `'unsafe-eval'`。
+       插件是下载到本机执行的（见 app.js 的 pluginParse），new Function 在
+       原来的 `'self'` 下会被直接拒。门只开在插件市场这一条路上：只认 GitHub、
+       装之前核 size 和 sha256。其余三种注入仍然全挡着。
      · style 必须放 `'unsafe-inline'`：配色、进度条、时间轴都是行内 style。
      · img/media 放开 http(s)/data:/blob:：课程图标、头像、扫码预览流在这里面。
      · connect-src 放开 *：教务、门户、学习通的接口几十个域名，列不全。 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data: blob: https: http:; script-src 'self' file:; style-src 'self' 'unsafe-inline' file:; img-src 'self' file: data: blob: https: http:; media-src 'self' blob: file:; font-src 'self' file: data:; connect-src *; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data: blob: https: http:; script-src 'self' file: 'unsafe-eval'; style-src 'self' 'unsafe-inline' file:; img-src 'self' file: data: blob: https: http:; media-src 'self' blob: file:; font-src 'self' file: data:; connect-src *; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
 <!-- 2026-11-10 加 interactive-widget=resizes-content：软键盘弹起来时
      让布局视口跟着缩，而不是盖在页面上。我们的壳是 100dvh 的，
      不声明这个的话，登录页、反馈页那种靠下的输入框会被键盘压住，
@@ -43,6 +47,12 @@
      两边都留着 @stats 标记，判断「剪干净了没」就靠它们。 -->
 <link rel="stylesheet" href="stats.css">
 <!-- /@stats -->
+<!-- 🔴 2026-11-28 U118：script-src 加了 'unsafe-eval'，只为插件市场。
+     插件是下载到本机再执行的，new Function 在原来的 script-src 'self' 下会被
+     直接拒（EvalError），真机上表现为「装不上」。加这一条是把这扇门开在
+     一个确定的地方：插件只从 GitHub 来、装之前核 size + sha256，
+     而且页面里所有外来文字都走 esc()。
+     ⚠️ 以后谁要收紧 CSP，先看 app.js 的 pluginParse —— 那条路会一起断。 -->
 </head>
 <body>
 
@@ -216,6 +226,13 @@
     <!-- 2026-11-24 两级导航：一级「学习通 / 中国大学 MOOC」是并列的主软件，
          二级「成绩」挂在学习通下面（点一级平台可回到学习通待办页）。
          两行分开装，避免一行四个 chip 看不出平台与教务数据的层级。 -->
+    <!-- 正在签到（2026-11-28 U121）：用户要求「提到学习页顶部」。
+         只在这一刻真有「还没签、还能签」的签到时出现，平时整条 hidden，
+         不占地方。点它 = 直接进那一场签到的原页（和签到卡里那一行同一个去处）。
+         🔴 它只是把「有签到」这件事提前说一声，不做任何代签 —— 见 app.js
+            cxSignCardHtml 顶部那段为什么不做一键签到。 -->
+    <div class="cx-signbar" id="cxSignBar" hidden></div>
+
     <div class="exnav exnav-main" id="exNav"></div>
     <div class="exnav exnav-subrow" id="exNavSub" hidden></div>
 
@@ -227,6 +244,16 @@
       <!-- 学习通（原 exViewCx，id 保留：判据脚本按它找元素） -->
       <div id="exViewCx">
         <div id="cxBody"></div>
+      </div>
+
+      <!-- ---------------- 签到（2026-11-28 U122 独立成一页） ----------------
+           用户原话「把签到页和学习通还有中国大学 MOOC 并列」——
+           它从学习通下面的三级筛选药丸提拔成一级视图，和两个平台平起平坐。
+           数据还是学习通那一份（CX.data.signs），不另打请求；
+           这里只是换了个住处：一页说清「现在要签什么、我签过什么、漏了什么」。
+           🔴 仍然只**看**不代签，理由见 app.js cxSignCardHtml 顶部那段。 -->
+      <div id="exViewSign" hidden>
+        <div id="cxSignBody"></div>
       </div>
 
       <!-- 🔴 2026-11-24 U68：学习通下面的「作业」小标题。
@@ -561,7 +588,7 @@
           <svg viewBox="0 0 24 24"><path d="M3.5 10.6 12 4l8.5 6.6V20a1 1 0 0 1-1 1h-5v-6h-5v6h-5a1 1 0 0 1-1-1z"/></svg>
         </div>
         <b>还没有组件</b>
-        <p>点右上角「+ 组件」，加一个组件</p>
+        <p>点右上角「+ 组件」，下载一个组件</p>
       </div>
       <!-- ===== 组件 1：慧生活（饮水 / 电费 / 积分 / 任务）=====
            2026-11-24 按用户要求改成浅色摘要卡：卡片上只留名字 + 两个真数
@@ -1503,6 +1530,23 @@
         <!-- 2026-11-23：原来这两颗是挤在版本号下面的一行灰色小字
              （`.aboutmini`），不好点也看不出能点。按用户要求改成和
              「问题反馈 / 检查更新」同款的**整行条目**：左侧黑字 + 右侧箭头。 -->
+        <!-- 插件市场（2026-11-28 U118）。
+             用户原话：「我想在这个界面的课程调整和权限中间，但是整体和权限粘在一起
+             （和清除缓存一样）加一个插件市场」。
+             ⇒ 位置就是这一张卡的第一行：视觉上在「课程调整」下面、「权限」上面，
+                但它和「权限 / 清除本机缓存」同卡，和清缓存那种「一整行、带箭头」
+                的样式一致，不另起一张卡。
+             右边那行字会跟着状态变：还没装插件 / 已装 N 个 / N 个可更新。 -->
+        <!-- 2026-11-28 U119：用户要求「插件市场旁边加一行小字：需要魔法才能打开」。
+             这不是技术说明，是**给人省一次困惑** —— 学校网 / 家里宽带上打不开，
+             看起来像 App 坏了；写在行里，点之前就知道了。 -->
+        <button class="row tap" id="rowPlugin">
+          <span class="k k2"><span>插件市场</span><i>需要魔法才能打开</i></span>
+          <span class="rowend">
+            <span class="v muted" id="mePlugin">还没装插件</span>
+            <svg class="rowico" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+          </span>
+        </button>
         <button class="row tap" id="rowPerm" hidden>
           <span class="k">权限</span>
           <span class="rowend">
@@ -1530,6 +1574,54 @@
           </span>
         </button>
       </div>
+    </div>
+  </section>
+
+  <!-- ================= 插件市场（「我的」→ 插件市场）=================
+       2026-11-28 U119：用户给了参考图，要求「点开插件市场之后整个界面单独做一个，
+       插件就是一块一块的，上面显示提交人以及提交时间」。
+       原来是套在底部弹层里的（和「+ 组件」同一个壳），现在是一整页：
+       顶部返回 + 标题，内容自己滚，底部四个 tab 照旧亮着「我的」。
+
+       🔴 页面里**不再写**那句「插件只从 GitHub 下载…」的长说明 ——
+          用户点名删掉。要说的只剩空状态那一句（连不上时说连不上）。
+       🔴 上一版的「别人做的插件？点这里提交」改成「我也做一个」，
+          点了直接去 GitHub 新建文件（提交时自动开 PR），不再中转一个弹层。 -->
+  <section class="page" id="page-plugins" hidden>
+    <header class="pagehead">
+      <button class="ghost-btn back" id="plgBack" aria-label="返回我的">
+        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h1>插件市场</h1>
+      <button class="ghost-btn" id="plgReload" aria-label="重新检查">
+        <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      </button>
+    </header>
+    <div class="scroll">
+      <div class="plg-list" id="plgList"></div>
+      <!-- 提交入口（页面最下面一颗整行按钮）。 -->
+      <button class="btn primary block plg-add" id="plgSubmit">我也做一个</button>
+    </div>
+  </section>
+
+  <!-- ================= 插件自己的页面（生活页卡片 → 点开）=================
+       2026-11-28 U130：用户「不要限制插件，不是只能显示在生活组件里面」。
+       插件除了能在生活页画一张卡，还可以交一整页 HTML —— 点卡片进来就是它
+       自己的界面，标题、排版、按钮全由插件定，App 只提供这块能滚的画布和
+       左上角那颗返回。
+
+       🔴 一个通用容器，所有插件共用：id 固定、内容每次进来重画，不按插件
+          各建一页（那要动态插 DOM，返回栈也会乱）。当前是谁由 app.js 的
+          PLGP 记着。 -->
+  <section class="page" id="page-plgpage" hidden>
+    <header class="pagehead">
+      <button class="ghost-btn back" id="plgPageBack" aria-label="返回生活">
+        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h1 id="plgPageTitle">插件</h1>
+    </header>
+    <div class="scroll" id="plgPageScroll">
+      <div class="plgpg" id="plgPageBody"></div>
     </div>
   </section>
 

@@ -107,6 +107,11 @@ const KEY = {
   /* 上次下单成功的「支付渠道」（net_type）。住理各校项目配的渠道不一样，
      摸对一次就记下来，下次直接用，不必再从 4 开始挨个试。 */
   zlNetType: 'zt.zlnet',
+  /* 已装插件（2026-11-28 U118）：`{id:{ver,code,size,at}}`。
+     🔴 只存「装了什么」这份索引；插件代码本身另存 `zt.plugin.<id>`
+        （见 pluginCodeKey）。分开存是为了删一个插件时不用整体重写索引，
+        也不会因为某段代码存不下把索引一起弄坏。 */
+  plugins: 'zt.plugins',
   /* 每个连接的**上一次结果**（U87）：`{zl:{at,ok,msg}, cx:{…}, …}`。
      只存结论，不存请求参数、密码、token。见 diagSet。 */
   diag: 'zt.diag',
@@ -134,8 +139,8 @@ const ZL = { scan: false, sheet: false, billsTry: 0, billsOpen: false, prog: '',
    自动改成 build_apk.py 里的 VERSION_NAME / VERSION_CODE —— 这里照旧要写，
    但**不用手改**，改了也会被覆盖。
    code 是整数，只增不减：比版本号字符串靠谱（"0.10.0" < "0.9.0" 是字符串比较的经典坑）。 */
-const APP_VERSION = '1.0.3';
-const APP_CODE = 5;
+const APP_VERSION = '1.0.4';
+const APP_CODE = 6;
 
 /* 2026-11-23：这里原来有 HELP_URL（功能说明书，指向 hobson.cc/help/）。
    「说明」按钮删了，地址也一起删 —— 那一页是原作者站点的航院通说明书。 */
@@ -430,15 +435,15 @@ let CFG = Object.assign(
     // 学习通「屏蔽的课程」：元素是 "courseId:classId"（和 native 侧 cxRestKey 同口径）。
     // 往期/结课的课每轮都要探一遍签到，课多的人一轮几十个请求 —— 屏蔽掉就不发了。
     cxSkip: [],
-    // 2026-11-24：生活页的小组件。null / 缺项 = 全部显示；数组里只放要显示的 id。
-    // 新增组件只要在 LIFE_WIDGETS 里加一项，不用改这里。
+    // 2026-11-28 U117：生活页**已下载**的组件 id。null = 第一次打开，按
+    // LIFE_WIDGETS 里的 pre 装（现有四张卡都在）。空数组 = 一个都没下载。
     lifeWidgets: null,
+    // 住理生活这张卡「已经替老用户补过一次」的标记（见 lifeOn）。
+    zlAdded: false,
     // 住理生活（洗澡热水）存下来的设备二维码：`[{id,name,raw,at}]`。
     // 🔴 存的是**二维码原文**，不是我们自己编的编号 —— 用户随时可以看见、
     //    复制、发给同学，也不怕哪天住理换了编号规则把我们存的变成废数据。
     zlDevs: [],
-    // 住理生活这张卡「已经替老用户补过一次」的标记（见 lifeOn）。
-    zlAdded: false,
     // 2026-11-23：原来的 reportOn（匿名上报开关）删了 —— 用户不要这个开关，
     // 上报本身也一起停了，见 reportProblem 上面那段说明。
     // 绑定完课表后「要不要开提醒」问过没有（0.48.1）。
@@ -1470,15 +1475,84 @@ function parityOf(weeks) {
 }
 
 /** 某周某天的课：day -> period -> [course] */
+/* ---------------- 本机调整学校课（U107） ----------------
+ *
+ * 用户 2026-11-28：「这个教务系统本身的课为什么改不了」——调课、临时改教室是常事，
+ * 但学校那套数据我们一个字都不能写（写了下次同步也会被覆盖，还可能把真课表弄坏）。
+ *
+ * 做法：**只改这台手机上怎么画**。`CFG.courseEdits[课程代码]` 存一份覆盖：
+ *   { slots?, weeks?, room? }
+ * occupancy 出图前套一层，其它地方（课程详情、成绩、同步）都用原数据。
+ * 🔴 原始数据一个字不动，删掉这条覆盖就还原。
+ * 🔴 键用课程代码，不是名字 —— 同名不同课（比如两个「体育」）不能互相串。
+ */
+function courseEdits() {
+  const e = CFG.courseEdits;
+  return (e && typeof e === 'object') ? e : {};
+}
+
+function courseEdit(code) {
+  return courseEdits()[code] || null;
+}
+
+/** 这门课在本机调整表里的键。
+ *  🔴 U109：教务数据里有个别行没有课程号（`code` 是空串）。以前直接拿
+ *     `sch.code` 去写调整，`saveCourseEdit` 头一句 `if (!code) return;`
+ *     就静默丢了 —— 可界面上已经回了「改好了」。用户看到的就是
+ *     「说改好了，其实一点没动」。所以这里给一个稳定的兜底键：
+ *     没有课程号就用「课名 + 老师」，同一门课每次算出来都一样。 */
+function courseKey(c) {
+  if (!c) return '';
+  const k = String(c.code || '').trim();
+  if (k) return k;
+  return 'n:' + String(c.name || '').trim() + '|' + String(c.teacher || '').trim();
+}
+
+/** 写 / 删一条本机调整。patch 传 null 表示恢复原样。返回是否真的写进去。 */
+function saveCourseEdit(code, patch) {
+  const key = String(code || '').trim();
+  if (!key) return false;
+  const all = Object.assign({}, courseEdits());
+  if (!patch) delete all[key];
+  else all[key] = Object.assign({}, all[key] || {}, patch);
+  CFG.courseEdits = all;
+  store.set(KEY.settings, CFG);
+  renderSchedule(); renderMe();
+  return true;
+}
+
+/** 套上本机调整后的课（不改原始对象）。key 是 courseKey(raw)，一并写回 code，
+ *  这样隐藏 / 单节隐藏 / 自检用的都是同一个键。 */
+function withEdit(c, e, key) {
+  const k = key || courseKey(c);
+  if (!e) return (k && k !== c.code) ? Object.assign({}, c, { code: k }) : c;
+  return Object.assign({}, c, {
+    code: k || c.code,
+    slots: Array.isArray(e.slots) ? e.slots : c.slots,
+    weeks: Array.isArray(e.weeks) ? e.weeks : c.weeks,
+    room: (e.room != null && e.room !== '') ? e.room : c.room
+  });
+}
+
 function occupancy(week) {
   const map = {};
   const hid = hiddenSet();
   const hidSlot = slotHiddenSet();
-  allCourses().forEach((c) => {
+  const edits = courseEdits();
+  allCourses().forEach((raw) => {
+    const key = courseKey(raw);
+    const e = edits[key];
+    // 「只调这一次」：这一周被跳过（见 update_course 的单次调课）。
+    if (e && Array.isArray(e.skipWeeks) && e.skipWeeks.indexOf(week) >= 0) return;
+    const c = withEdit(raw, e, key);
     if (hid.has(c.code)) return;               // 用户隐藏掉的课不画
     if (!c.weeks || c.weeks.indexOf(week) < 0) return;
+    // 🔴 U114：整天调课只该跳那一天那几节，不能把同一门课在这周其他天的也一起抹掉。
+    //    skipWeeks 的粒度是「这门课这一周」，粒度太粗；skipCells 精确到「第几周第几天第几节」。
+    const cellSkip = (e && Array.isArray(e.skipCells)) ? e.skipCells : [];
     (c.slots || []).forEach((s) => {
       if (hidSlot.has(slotKey(c.code, s.day, s.period))) return;  // 只藏这一节
+      if (cellSkip.length && cellSkip.some((x) => x && x.w === week && x.d === s.day && x.p === s.period)) return;
       const k = s.day + ':' + s.period;
       (map[k] = map[k] || []).push(c);
     });
@@ -2092,7 +2166,7 @@ function visibleDays() {
    跳一次外链）。中间那格的历史：公告 → WIKI → 百科 → 功能 → 生活。 */
 const TABS = ['schedule', 'exams', 'campus', 'me'];
 const SUBPAGES = ['calendar', 'rooms', 'accounts', 'notice', 'stats', 'services',
-                  'feedback', 'perm'];
+                  'feedback', 'perm', 'plugins', 'plgpage'];
 /* 子页是从哪个 tab 进去的 —— 返回时回那里，底部也要高亮那一个。
    原来只有校历/空教室两个、都挂在课表下，所以写死成 'schedule'；
    0.14.0 的「账号管理」是从「我的」进去的，再写死就会高亮错 tab。
@@ -2105,7 +2179,15 @@ const SUB_PARENT = { calendar: 'schedule', rooms: 'schedule',
                       feedback: 'me',
                       // 2026-11-15：权限自检挂在「我的」。它是一次「看看哪儿没配对」
                       // 的检查，一学期点不了两次，不该占底部一个位置。
-                      perm: 'me' };
+                      perm: 'me',
+                      // 2026-11-28 U119：插件市场也独立成一页了。它挂在「我的」下面，
+                      // 但和权限那种「一学期点两次」不同 —— 装插件、看更新是常事，
+                      // 所以底部 tab 仍亮「我的」，返回也是一步。
+                      plugins: 'me',
+                      // 2026-11-28 U130：插件自己的页面。它是从生活页那张卡
+                      // 点进来的，所以挂在「生活」下面，返回一步回生活页。
+                      // 🔴 所有插件共用这一页（id 固定），当前是哪一个由 PLGP 记着。
+                      plgpage: 'campus' };
 
 /* 当前真正在显示哪一页。
    🔴 不能拿 `.tab.active` 反推：子页亮的是「课表」，在空教室页按返回
@@ -2441,8 +2523,10 @@ function switchTab(name) {
     // 学校平台的数据是整份同步下来的，进页面不用再问一次。
     if (CFG.examView === 'mooc') moocEnter();
     // 停在学习通 / 作业这两格时要进一次；成绩不用。
-    // 🔴 认不出来的旧值（1.3.10 存过的 examView='sign'）一律当学习通处理，
-    //    否则从那个版本升上来的人一进学习页就什么都不加载 —— 整页空白。
+    // 🔴 认不出来的旧值一律当学习通处理，否则从那个版本升上来的人一进学习页
+    //    就什么都不加载 —— 整页空白。
+    //    U122 起 'sign' 是**合法**视图（签到整页），不再走这条兜底：
+    //    上面 renderExamView 已经把它送进 signEnter，数据照样是学习通那一份。
     else if (!CFG.examView || CFG.examView === 'cx' || CFG.examView === 'work' ||
              EX_VIEWS.indexOf(CFG.examView) < 0) cxEnter();
     // 🔴 2026-11-24 U67：「每次点开学习界面都自动检查学习通没做好」。
@@ -2455,6 +2539,11 @@ function switchTab(name) {
     cxLiveRun();
   }
   if (name === 'me') renderMe();
+  // 插件市场（U119）：每次进来都重拉清单 —— 看到的是缓存那份的话，刚上架 /
+  // 刚更新的插件要退出去再进两次才出现。断网时下面会明说「连不上 GitHub」。
+  if (name === 'plugins') pluginPaintList(true);
+  // 插件自己那一页（U130）：每次进来重画一遍，插件里跟时间有关的内容才对得上。
+  if (name === 'plgpage') pluginPagePaint();
   // 数据台（只有测试版）：进来就取一次，一分钟内重复进来不再打。
   // 上面那道 statsReady() 已经在这个分支之前 return 过了，这里只管调用。
   if (name === 'stats') statsLoad(false);
@@ -4672,7 +4761,7 @@ function closeSheet() {
   // 关于 / 更新日志弹层给外壳加过 .about-sheet / .log-sheet（改留白），关掉时一起撤掉，
   // 别污染下一个弹层。
   if ($('sheetBody') && $('sheetBody').parentElement) {
-    $('sheetBody').parentElement.classList.remove('about-sheet', 'log-sheet');
+    $('sheetBody').parentElement.classList.remove('about-sheet', 'log-sheet', 'wn-sheet');
   }
   // 住理生活的弹层也是走这一个 sheet：关掉时把标记清掉，
   // 免得「记一笔」在弹层关了之后还去重画一个看不见的 body。
@@ -5995,13 +6084,18 @@ function renderExamChips(terms) {
  *    旧的 CFG.examView === 'exam' 会在 renderExamView 里自动落回 'cx'。 */
 // 🔴 2026-11-24 U68：学习通下再加一级「作业」小标题（用当前默认的学习通待办界面）。
 // 它不是新平台，是学习通的一个筛选视图 —— 所以 tier=2、exPrimaryOf 归到 cx。
-// 🔴 2026-11-24 U73：签到**不是**二级标题 —— 用户原话「这个签到是放到三级标题的
-//    作业后面啊，就是全部、作业、其他那一排」。所以这里不加 sign，
+// 🔴 2026-11-24 U73：签到**当时**不是二级标题 —— 用户原话「这个签到是放到三级标题的
+//    作业后面啊，就是全部、作业、其他那一排」。所以这里当时没有 sign，
 //    它改成了 cx-cats 那一排里的筛选药丸（见 CX_KINDS / cxCatsHtml）。
-const EX_VIEWS = ['cx', 'mooc', 'grade', 'work'];
+// 🔴 2026-11-28 U122：用户改主意 ——「把签到页和学习通还有中国大学 MOOC 并列」。
+//    签到又回到 EX_VIEWS 里，这回是**一级视图**（不是二级、不是药丸）：
+//    它有一整页自己的地方（#exViewSign / #cxSignBody）。
+//    ⚠️ 加回 'sign' 之后，exOn() 里那句「把误加的 sign 清掉」必须拆掉，
+//       否则每次 exOn 都把这个新视图删出筛选表 ⇒ 导航里永远不出现。
+const EX_VIEWS = ['cx', 'mooc', 'sign', 'grade', 'work'];
 // 这个映射就是「分类」本身。改分类只改这里，不用动渲染。
 const EX_GROUP = {
-  cx: '外部平台', mooc: '外部平台',
+  cx: '外部平台', mooc: '外部平台', sign: '外部平台',
   grade: '学校平台',
   work: '外部平台',
 };
@@ -6012,42 +6106,59 @@ const EX_GROUP = {
  *   放在学习通下方」。原来四个 chip 一字排开，看不出平台和数据是两类东西。
  *   🔴 1.5.4：学分页面整套移除，二级现在只剩成绩 / 作业；上面那句原话保留原貌。
  *   `EX_TIER` 只描述层级，筛选和显隐仍走 EX_VIEWS / exWidgets。 */
-const EX_TIER = { cx: 1, mooc: 1, grade: 2, work: 2 };
+const EX_TIER = { cx: 1, mooc: 1, sign: 1, grade: 2, work: 2 };
 // 筛选：null / 缺项 = 全部显示；数组里只放要显示的 id（口径同 lifeWidgets）。
 // 用户：「让学习通或中国大学慕课显示还是不显示，就和生活里的小组件一样」。
 function exOn() {
-  // 🔴 必须是 let：下面要就地清掉 U72 误写进去的 'sign'，用 const 会抛
-  //    「Assignment to constant variable」—— 而 exOn 被 renderExamView 调用，
-  //    一抛就是**整个学习页空白**（1.3.11 事故，见 U74）。
+  // 🔴 必须是 let：下面要就地清掉老配置里过期的 id（比如 1.5.4 撤掉的 credit），
+  //    用 const 会抛「Assignment to constant variable」—— 而 exOn 被
+  //    renderExamView 调用，一抛就是**整个学习页空白**（1.3.11 事故，见 U74）。
   let v = CFG.exWidgets;
-  // 🔴 2026-11-24：老用户升级上来的 exWidgets 里没有 U68 新增的 'work'。
-  //    直接从 CFG 读会让「作业」这一格永远不出现 —— 用户截图里只有成绩
-  //    就是这个原因。这里补一次迁移：学习通在就补上作业，并写回本机。
   if (Array.isArray(v)) {
     let dirty = false;
-    // 顺手把 U72 误加的 'sign' 清掉（签到已回到三级筛选，不再是二级标题）。
-    const cleaned = v.filter((k) => k !== 'sign' && k !== 'credit');
+    // 老配置里可能还留着已下线的 id（credit = 1.5.4 撤掉的学分页）。
+    // 🔴 2026-11-28 U122：这里**不再删 sign** —— 签到已经是一级视图了。
+    //    原来那句 `k !== 'sign'` 是 U74 为了清理 U72 的误加写的，
+    //    留着它等于每次进学习页都把「签到」这颗新导航删掉。
+    const cleaned = v.filter((k) => k !== 'credit');
     if (cleaned.length !== v.length) { v = cleaned; CFG.exWidgets = cleaned; dirty = true; }
-    ['work'].forEach((k) => {
-      if (v.indexOf('cx') >= 0 && v.indexOf(k) < 0) { v.push(k); dirty = true; }
-    });
+    // 🔴 一次性迁移（2026-11-28 U122）：老用户升级上来时 exWidgets 里没有 sign，
+    //    不补的话导航里根本不画「签到」，用户找不到入口。
+    //    为什么用标记而不是每次都比一遍：以前 work 就是这么补的，结果用户
+    //    取消勾选「作业」后下次进来又被塞回去 —— 勾选框看着像坏的。
+    //    这次 sign 补一次就记账（CFG.exMig=2），之后用户自己取消就真取消。
+    if (Number(CFG.exMig || 0) < 2) {
+      ['work', 'sign'].forEach((k) => {
+        if (v.indexOf('cx') >= 0 && v.indexOf(k) < 0) { v.push(k); dirty = true; }
+      });
+      CFG.exMig = 2;
+      if (dirty) CFG.exWidgets = v;
+    }
     if (dirty) { try { store.set(KEY.settings, CFG); } catch (e) { /* 存不了不影响显示 */ } }
   }
   const arr = Array.isArray(v) ? v.slice() : EX_VIEWS.slice();
   // 成绩/作业是挂在学习通下面的次标题：学习通被筛掉时它们也不能单独留着。
+  // 🔴 签到不在此列 —— 它是一级视图（U122），学习通关掉也照样能自己站着，
+  //    只是页面上会请他连学习通而已。
   if (arr.indexOf('cx') < 0) return arr.filter((k) => EX_SUBVIEWS.indexOf(k) < 0);
   return arr;
 }
-// 一级只有两块并列的主软件；成绩/作业属于学习通那一块。
-const EX_PRIMARY = ['cx', 'mooc'];
+// 一级只有三块并列的主软件；成绩/作业属于学习通那一块。
+// 🔴 2026-11-28 U122：用户「把签到页和学习通还有中国大学 MOOC 并列」——
+//    签到排在 MOOC 后面：先平台、后数据，和学习通下面那两颗的顺序一个道理。
+const EX_PRIMARY = ['cx', 'mooc', 'sign'];
 // 🔴 2026-11-24 U71：用户「这个作业放到成绩的前面」—— 作业排第一颗。
 const EX_SUBVIEWS = ['work', 'grade'];
-function exPrimaryOf(v) { return v === 'mooc' ? 'mooc' : 'cx'; }
-const EX_NAME = { cx: '学习通', mooc: '中国大学 MOOC',
+function exPrimaryOf(v) {
+  if (v === 'mooc') return 'mooc';
+  if (v === 'sign') return 'sign';
+  return 'cx';
+}
+const EX_NAME = { cx: '学习通', mooc: '中国大学 MOOC', sign: '签到',
                   grade: '成绩', work: '作业' };
 // 🔴 2026-11-24 U71：用户「最顶上这个点了成绩的话会变成成绩，我要固定为学习」。
 //   这一页整页都叫「学习」，二级 tab 只是筛选，不该把页标题改掉。
-const EX_HEAD = { cx: '学习', mooc: '学习', grade: '学习', work: '学习' };
+const EX_HEAD = { cx: '学习', mooc: '学习', sign: '学习', grade: '学习', work: '学习' };
 
 /** 导航条：同一组里的连着画，组与组之间画一道竖线。
  *
@@ -6149,6 +6260,11 @@ function renderExamView() {
   }
   if (v === 'mooc') moocEnter();
   if (v === 'grade') renderGrades();
+  // 签到（U122）：自己一整页，数据仍走学习通那一份 CX.data。
+  if (v === 'sign') signEnter();
+  // 顶部那条只在学习通/作业两屏出现，切走要收起来、切回要补上。
+  // （签到那一页满页都是签到，再顶一条就是同一句话说两遍。）
+  renderCxSignBar();
 }
 
 function setExamView(v) {
@@ -6171,7 +6287,8 @@ function openExFilterSheet() {
     '<div class="sh-title">筛选平台</div>' +
     '<div class="sh-sub">取消勾选即可隐藏对应板块。</div>' +
     '<div class="picklist">' + opt('cx') + opt('grade') +
-    '<div class="exf-div" aria-hidden="true"></div>' + opt('mooc') + '</div>' +
+    // U122：签到是一级视图了，排在 MOOC 后面（和导航一致）。
+    '<div class="exf-div" aria-hidden="true"></div>' + opt('mooc') + opt('sign') + '</div>' +
     '<div class="sheetbtns"><button class="btn primary" id="exfDone">完成</button></div>';
   $('sheetMask').hidden = false;
   $('sheetBody').querySelectorAll('[data-exf]').forEach((b) => {
@@ -7016,6 +7133,8 @@ function renderMe() {
   autoRepaint();
   // 「权限」那颗半按钮：只在读得到状态的壳里出现（网页版没有系统权限这回事）。
   renderPermEntry();
+  // 插件市场那行右边的字（还没装插件 / 已装 N 个 / N 个可更新）。
+  pluginPaintEntry();
   const bound = !!(DATA && DATA.profile && DATA.profile.studentId);
   $('meBound').hidden = !bound;
   $('meUnbound').hidden = bound;
@@ -9600,10 +9719,16 @@ function cxPaint() {
   if (!box) return;
   if (CX.state === null) {
     box.innerHTML = '<p class="tip">正在读学习通状态…</p>';
-    return;
+  } else if (CX.state !== 'ok') {
+    cxPaintLogin();
+  } else {
+    cxPaintTodo();
   }
-  if (CX.state !== 'ok') { cxPaintLogin(); return; }
-  cxPaintTodo();
+  // 顶部「正在签到」和这一页同一个数据源：画完列表顺手对一次，不会两边打架。
+  renderCxSignBar();
+  // 签到独立页（U122）也吃这一份数据。它在前台时就顺手重画一次 ——
+  // 不然扫描／快查回来了，那一页还停在「正在查…」。
+  if (CFG.examView === 'sign') signPaint();
 }
 
 /** 当前该重画哪一页。
@@ -10225,10 +10350,10 @@ function cxKindCounts(items) {
 function cxKindFilter(items) {
   const want = CFG.cxKind || 'all';
   if (want === 'all') return 'all';
-  // 🔴 2026-11-24 U73：「签到」这颗药丸是常驻的（见 cxCatsHtml 的 PINNED），
-  //    它下面画的是签到卡而不是 items，计数天生可能是 0 ——
-  //    不能因为 items 里没有 kind=sign 就把用户弹回「全部」。
-  if (want === 'sign') return 'sign';
+  // 🔴 2026-11-28 U122：签到这颗药丸撤了 —— 签到有自己的整页（和学习通并列）。
+  //    老配置里存过 cxKind='sign' 的人（U73~U121 之间选过那颗），进来一律落回
+  //    「全部」，不然会停在一个再也点不出来的空视图上。
+  if (want === 'sign') return 'all';
   const c = cxKindCounts(items);
   return (c[want] || 0) > 0 ? want : 'all';
 }
@@ -10270,6 +10395,277 @@ function cxSignOpen(it) {
   if (it.startAt) return (now - it.startAt) < CX_SIGN_LIVE_SEC;
   // ③ 两头都没有：没有证据 ⇒ 不算能签。
   return false;
+}
+
+/** 学习页顶部那条「正在签到」（2026-11-28 U121）。
+ *
+ *  用户两句话：「签到……提到学习页顶部」「有签到就提醒」。
+ *  数据不另打请求 —— 用的就是全量扫描 + 快查合并后的 signs，判据也复用
+ *  cxSignOpen，所以**这条和签到卡永远说同一句话**。以前签到这块最常见的 bug
+ *  就是两套判据打架（卡片说「1 个正在进行」、行里写「已结束」），别再开第二套。
+ *
+ *  🔴 只说不做：点它 = 点签到卡里那一行，打开学习通原页，自己签。
+ *     不伪造位置、不代签、不碰验证码 —— 理由见 cxSignCardHtml 顶部那段。
+ */
+function cxSignLiveNow() {
+  if (!CX.data || CX.state !== 'ok') return [];
+  let list = [];
+  try { list = cxSignsWithLive(CX.data); } catch (e) { list = []; }
+  const seen = {};
+  return (Array.isArray(list) ? list : []).filter((it) => {
+    if (!cxSignOpen(it)) return false;
+    const k = cxSignKey(it);
+    if (seen[k]) return false;
+    seen[k] = 1;
+    return true;
+  });
+}
+
+function renderCxSignBar() {
+  const el = $('cxSignBar');
+  if (!el) return;
+  // 只在「学习通 / 作业」两屏出现：MOOC 和成绩跟签到没关系；
+  // 签到那一页本身满页都是签到，再顶一条就是同一句话说两遍（U122）。
+  const v = CFG.examView || 'cx';
+  const live = (v === 'cx' || v === 'work') ? cxSignLiveNow() : [];
+  if (!live.length) {
+    if (!el.hidden) { el.hidden = true; el.innerHTML = ''; }
+    return;
+  }
+  const it = live[0];
+  const min = cxMinLeft(it);
+  const left = (min != null && min >= 0) ? '还剩 ' + cxLeft(min) : '';
+  const rest = live.length > 1 ? '还有 ' + (live.length - 1) + ' 个' : '';
+  const tail = [left, rest].filter(Boolean).join(' · ');
+  // 「签到」这两个字不重复写：标题已经写了，课程名后面的那半截就是它的名字。
+  const name = it.course
+    ? it.course + (it.title && it.title !== '签到' ? ' · ' + it.title : '')
+    : (it.title || '签到');
+  el.innerHTML =
+    '<span class="cx-signbar-hd">正在签到</span>' +
+    '<span class="cx-signbar-tx">' + esc(name) + '</span>' +
+    (tail ? '<span class="cx-signbar-lt">' + esc(tail) + '</span>' : '') +
+    '<svg class="cx-signbar-go" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+  el.hidden = false;
+}
+
+/* 点顶部那条：有直达地址就直接进那一场签到；
+ * 快查拿到的行没有地址，就切到「签到」这一页，让他看到完整那一行。
+ * 🔴 U122 起签到有自己的整页，「切到签到这一筛」= setExamView('sign')，
+ *    不再是去学习通列表里改一颗药丸 —— 用户已经把它提拔成一级视图了。 */
+$('cxSignBar').addEventListener('click', () => {
+  const it = cxSignLiveNow()[0];
+  if (!it) { renderCxSignBar(); return; }
+  const u = String(it.url || '');
+  if (u && window.NativeApi && typeof window.NativeApi.openWeb === 'function') {
+    window.NativeApi.openWeb(u, '签到', false);
+    return;
+  }
+  switchTab('exams');
+  setExamView('sign');
+});
+
+/* ================= 签到整页（2026-11-28 U122） =================
+ *
+ * 用户：「把签到页和学习通还有中国大学 MOOC 并列」。
+ * 于是签到从「学习通下面的三级筛选药丸」变成一级视图，有自己一整页。
+ *
+ * 🔴 三处必须永远说同一句话：这一页、学习页顶部那条、学习通里的签到卡。
+ *    所以三条共用 cxSignsWithLive（合并快查）、cxSignOpen（能不能签）、
+ *    cxSignKey（去重）—— 谁都不许自己再写一套判据。签到这块历史上
+ *    最烦人的 bug 就是「卡头说 1 个正在进行、下面那行写已结束」。
+ *
+ * 🔴 还是只**看**不代签。这一页做的是「把话说明白」：
+ *    现在要签哪几场、还剩多久、我签过什么、漏了哪次。
+ *    不伪造位置、不替人点、不碰验证码 —— 理由见 cxSignCardHtml 顶部那段。
+ */
+
+/** 去重后的全部签到（含已结束的）。和签到卡同一套 key，同一场只算一条。 */
+function signAll() {
+  if (!CX.data || !Array.isArray(CX.data.signs)) return [];
+  const seen = {};
+  const out = [];
+  CX.data.signs.forEach((it) => {
+    const k = cxSignKey(it);
+    if (seen[k]) return;
+    seen[k] = 1;
+    out.push(it);
+  });
+  return out;
+}
+
+/** 这一场的时间（用来排序）。endAt 优先，没有就 startAt。 */
+function signStamp(it) {
+  return Number((it && (it.endAt || it.startAt)) || 0);
+}
+
+/** 进「签到」这一页：先保证数据在，再画。
+ *  数据已经查过就不重打请求（cxAutoCheckOnTab 自己有 30 分钟阈值）。 */
+async function signEnter() {
+  signPaint();                       // 先把现有数据摆出来，别让人对着空白等
+  if (CX.state === null) {
+    await cxAutoCheckOnTab();
+    signPaint();
+    return;
+  }
+  cxAutoCheckOnTab();                // 后台对一次，回来了自己重画
+}
+
+function signPaint() {
+  const box = $('cxSignBody');
+  if (!box) return;
+
+  // ① 还在读登录态
+  if (CX.state === null) {
+    box.innerHTML = '<p class="tip">正在读学习通状态…</p>';
+    return;
+  }
+  // ② 没连学习通：签到数据全在学习通里，这里只能请他先连上。
+  //    按钮直接把人送到学习通那一格（那里有登录表单），不另做一份表单 ——
+  //    同一件事只有一个入口，改密码逻辑时才不会漏掉第二份。
+  if (CX.state !== 'ok') {
+    box.innerHTML =
+      '<div class="card cx-login">' +
+        '<h2 class="cx-h">签到要连上学习通</h2>' +
+        '<p class="cx-p">签到记录都在学习通里。连上之后，正在签的、签过的、漏了哪次，都能在这儿看到。</p>' +
+        '<p class="cx-p cx-hint">账号是你在学习通绑定的手机号，不是学号。</p>' +
+        '<button class="btn primary block" id="sgGoCx">去连学习通</button>' +
+      '</div>';
+    const go = $('sgGoCx');
+    if (go) {
+      go.addEventListener('click', () => {
+        // 🔴 兜底：用户可能在上面的「筛选」里把学习通关掉了。这时候直接切过去
+        //    会落到另一个视图上，按钮看着像没反应。先把学习通放回筛选表再切。
+        if (exOn().indexOf('cx') < 0) {
+          const cur = exOn().slice();
+          cur.push('cx');
+          CFG.exWidgets = EX_VIEWS.filter((k) => cur.indexOf(k) >= 0);
+          store.set(KEY.settings, CFG);
+        }
+        setExamView('cx');
+      });
+    }
+    return;
+  }
+
+  const all = signAll();
+  const live = all.filter(cxSignOpen);
+  const past = all.filter((it) => !cxSignOpen(it));
+  // 正在签的：最急的排最前（老师设的截止时间是唯一可信的边界）。
+  // 算不出时间的（只有 startAt 那种）沉到最后，不跟「还剩 2 分钟」抢位置。
+  live.sort((a, b) => {
+    const x = signStamp(a) || 1e12;
+    const y = signStamp(b) || 1e12;
+    return x - y;
+  });
+  // 历史：新的在上面。
+  past.sort((a, b) => signStamp(b) - signStamp(a));
+
+  let h = '';
+
+  // 扫描中就直说在扫 —— 这一页是「现在有没有要签的」，用户最在意的就是新旧。
+  const sc = CX.scan;
+  if (sc && sc.state === 'scanning') {
+    h += '<div class="sg-scan"><i class="cx-dot"></i>正在看学习通' +
+      (sc.n ? ' · 第 ' + (sc.i || 0) + '/' + sc.n + ' 门' : '') + '…</div>';
+  }
+
+  // ---- 正在签 ----
+  if (live.length) {
+    h += live.map((it) => {
+      const min = cxMinLeft(it);
+      const left = (min != null && min >= 0) ? '还剩 ' + cxLeft(min) : '';
+      const nm = it.course || it.title || '签到';
+      // 副标题：标题不是「签到」时补上（签退/手势/二维码都说一声），
+      // 再给开始时间。不写「第几周」——学习通不给，编不出来。
+      const bits = [];
+      if (it.title && it.title !== nm) bits.push(it.title);
+      const when = cxSignWhen(it);
+      if (when) bits.push(when + ' 开始');
+      const u = String(it.url || '');
+      return '<div class="card sg-live">' +
+        '<div class="sg-live-hd"><i class="sg-dot"></i><b>正在签到</b>' +
+          (left ? '<span class="sg-left">' + esc(left) + '</span>' : '') +
+        '</div>' +
+        '<div class="sg-course">' + esc(nm) + '</div>' +
+        (bits.length ? '<div class="sg-meta">' + esc(bits.join(' · ')) + '</div>' : '') +
+        // 🔴 2026-11-28 U123：按钮文案**只有一种**「去签到」。
+        //    以前有地址写「去签到」、没地址写「打开学习通」，两张卡并排一行，
+        //    用户一眼看到两个名字，第一反应是「同一个东西为什么叫法不一样」。
+        //    两件的用户动作其实是同一个：我要去签这一场。所以字统一，
+        //    进不去的那张在按钮下面用一行浅灰小字交代「进去后自己点一下」。
+        (u
+          ? '<button class="btn primary block sg-go" data-url="' + escAttr(u) +
+            '" data-title="' + escAttr(nm) + '">去签到</button>'
+          // 快查拿到的行常常没有直达地址（它只问「有没有活动」，不回活动地址）。
+          : '<button class="btn primary block sg-go sg-go-cx">去签到</button>' +
+            '<p class="sg-hint">学习通没给这一场的入口，进去后自己点一下</p>') +
+        '</div>';
+    }).join('');
+  } else {
+    h += '<div class="card sg-idle">' +
+      '<b>现在没有要签的</b>' +
+      '<p class="cx-p">有老师发起签到时，这一页会立刻出现，学习页顶上也会提醒一下。</p>' +
+      '</div>';
+  }
+
+  // ---- 我签过什么 ----
+  // 最多 30 条：这一页要看的是「最近」，不是账号历史全量。
+  const cap = 30;
+  h += '<div class="card sg-hist">' +
+    '<div class="sg-hd"><b>最近的签到</b>' +
+      (past.length > cap ? '<i>只列最近 ' + cap + ' 次</i>' : '') + '</div>' +
+    (past.length
+      ? '<div class="cx-srows">' +
+        past.slice(0, cap).map((it) => cxSignRowHtml(it, true)).join('') + '</div>'
+      : '<p class="cx-p">还没有签到记录。这学期第一节有签到的课之后，这里就会出现。</p>') +
+    '</div>';
+
+  // 「重新查一次」：签到是时效性最强的数据，得有一个手动出口。
+  // 平时进来会自动对一次（30 分钟阈值），这里只给「我就要现在看」的时候用。
+  h += '<button class="sg-refresh" id="sgRefresh">重新查一次</button>';
+
+  box.innerHTML = h;
+
+  const rf = $('sgRefresh');
+  if (rf) {
+    rf.addEventListener('click', () => {
+      if (CX.busy || (CX.scan && CX.scan.state === 'scanning')) {
+        toast('正在查，等它出来');
+        return;
+      }
+      cxScanStart(true, true);
+    });
+  }
+}
+
+/* 「去签到」按钮：和签到卡里那一行同一个去处 —— App 内打开学习通原页。
+ * 🔴 只负责把人送过去，签是他自己按的。 */
+if ($('cxSignBody') && !$('cxSignBody').dataset.sgBound) {
+  $('cxSignBody').dataset.sgBound = '1';
+  $('cxSignBody').addEventListener('click', (e) => {
+    if (!e.target || !e.target.closest) return;
+    // 没有直达地址的那一场（快查回来的行就没带）。按钮文字一样是「去签到」，
+    // 只是落到学习通原页：学习通列表里那颗「签到」药丸已经撤了（U122），
+    // 不能把人送回一个已经没有签到的列表。
+    if (e.target.closest('.sg-go-cx')) {
+      if (window.NativeApi && typeof window.NativeApi.openWeb === 'function') {
+        window.NativeApi.openWeb(CX_HOME, '学习通', false);
+        return;
+      }
+      toast('这个版本的 App 打不开内置网页，请更新后再试');
+      return;
+    }
+    const b = e.target.closest('.sg-go[data-url]');
+    if (!b) return;
+    const u = b.getAttribute('data-url');
+    if (!u) return;
+    if (window.NativeApi && typeof window.NativeApi.openWeb === 'function') {
+      window.NativeApi.openWeb(u, b.getAttribute('data-title') || '签到', false);
+      return;
+    }
+    toast('这个版本的 App 打不开内置网页，请更新后再试');
+  });
 }
 
 /** 「签到」卡 —— 只**看**，不代签。
@@ -10447,12 +10843,14 @@ function cxCatsHtml(items, group) {
     '<button class="cx-cat' + (cur === 'all' ? ' on' : '') + '" data-kind="all"' +
     ' aria-label="全部，共 ' + total + ' 条">全部</button>';
   // 🔴 2026-11-24 U73：用户「这个签到是放到三级标题的作业后面啊，就是全部，
-  //    作业，其他那一排」。所以「作业 / 签到」这两颗**常驻**，且固定在最前面；
-  //    其余分类照旧只在自己有条目时才出现。
-  //    签到常驻的理由：它下面画的是签到卡（正在进行 / 最近的打卡），
-  //    不一定有 kind=sign 的待办条目，靠计数会整颗消失。
-  const PINNED = ['work', 'sign'];
-  const order = PINNED.concat(CX_KINDS.filter((k) => PINNED.indexOf(k) < 0));
+  //    作业，其他那一排」。当时「作业 / 签到」两颗都常驻、固定在最前面。
+  // 🔴 2026-11-28 U122：用户改主意 ——「把签到页和学习通还有中国大学 MOOC 并列」，
+  //    签到成了一级视图，这一排里的「签到」就多余了（用户圈出来说「把这个删了」）。
+  //    现在只「作业」一颗常驻；sign 还要显式过滤掉 —— CX_KINDS 里仍留着它
+  //    （数据那边 type 2/74 还是签到，不能乱归到「其他」），但只要 items 里
+  //    有签到条目它就会自己冒出来，所以这里得挡一道。
+  const PINNED = ['work'];
+  const order = PINNED.concat(CX_KINDS.filter((k) => PINNED.indexOf(k) < 0 && k !== 'sign'));
   order.forEach((k) => {
     if (PINNED.indexOf(k) < 0 && !c[k]) return;
     h += '<button class="cx-cat' + (cur === k ? ' on' : '') + '" data-kind="' + k + '"' +
@@ -12117,9 +12515,8 @@ function cxPaintTodo() {
   const all = cxWithLive(cxSortItems(
     cxWithMailTodo(Array.isArray(d.items) ? d.items : [])));
   const kind = cxKindFilter(all);
-  const isSignView = (kind === 'sign');
+  // 🔴 U122 起没有「签到」这一筛了（签到整页自己画），所以 shown 不需要再为它开空支。
   const shown = kind === 'all' ? all
-             : isSignView ? []
              : all.filter((it) => cxKindOf(it) === kind);
   // 🔴 2026-11-23：左滑收起的那几条不再摆在这里（用户要的「收起」）。
   //    它们没消失 —— 列表下面有一颗「已读 N 条 · 点开看」，点开能找回来。
@@ -12158,11 +12555,7 @@ function cxPaintTodo() {
   const signList = cxSignsWithLive(d);
   const liveSigns = signList.filter(cxSignOpen).length;
   let headMain, headWord;
-  if (isSignView) {
-    // 「签到」那格的主角是下面那张卡，头部就说正在进行几场。
-    headMain = liveSigns;
-    headWord = liveSigns ? ' 个正在进行' : '';
-  } else if (kind !== 'all') {
+  if (kind !== 'all') {
     headMain = items.length;
     headWord = ' 条' + CX_KIND_NAME[kind];
   } else if (dueN) {
@@ -12189,11 +12582,10 @@ function cxPaintTodo() {
   html = (scanning && !quiet ? cxScanStripHtml(s) : '') + cxNewBarHtml() +
     '<div class="cx-hd">' +
     (headMain ? '<b>' + headMain + '</b>' + headWord
-              // 这里**不带数字**：下面那张签到卡第一行就写着「N 个正在进行」，
-              // 隔 40px 把同一个数字说两遍，看着像出了 bug。
-              : (isSignView ? '没有要签的'
-                            : (liveSigns ? '签到在进行'
-                                         : (missedN ? '没查全' : '都清了')))) +
+              // 这里**不带数字**：签到有自己那一页，隔一行把同一个数字说两遍
+              // 什么都不多，只让人觉得哪儿重复了。
+              : (liveSigns ? '签到在进行'
+                           : (missedN ? '没查全' : '都清了'))) +
     '<span class="cx-hdm">' + cxAgo(CX.age) + ' · ' +
       (stale ? '这次没更新上' : cxScanScope(d)) + '</span>' +
     // 排序挂在这行右端（2026-11-11 从药丸行搬过来的，理由见 cxCatsHtml）。
@@ -12236,8 +12628,10 @@ function cxPaintTodo() {
   //    原来那是上下两行（34 + 40 + 两个间距 = 90px），一行分类、一行排序，
   //    做的事却只有一件「筛」。合成一行之后省下 48px，而且更像一件事。
   // 🔴 2026-11-24 U73：签到是这一排里的筛选药丸，不再有独立视图容器。
-  //    有签到数据时这一排也要出现 —— 否则签到一多/一少就找不到回去的路。
-  if (all.length || signList.length || isSignView) html += cxCatsHtml(all, group);
+  // 🔴 2026-11-28 U122：签到药丸撤了，签到自己一整页。这一排只在**真有待办**
+  //    时出现 —— 原来靠「有签到数据」也把它撑出来，于是「暂无待办」上面顶着
+  //    一排没有东西可筛的药丸（用户截图里就是这个样子）。
+  if (all.length) html += cxCatsHtml(all, group);
 
   // 0.33.0：首屏只铺前 `CX.showN` 条。
   // 这一页天生是长列表（一条 84px），十条就 840px —— 不截的话必须滑。
@@ -12245,15 +12639,10 @@ function cxPaintTodo() {
   const cap = Math.max(1, CX.showN || CX_FIRST);
   const shownItems = items.slice(0, cap);
 
-  // 🔴 2026-11-24 U73：「签到」这颗药丸的内容就是原来那张签到卡 ——
-  //    用户要的是把签到**放进这一排筛选里**，不是给它一个二级标题。
-  //    这一格不铺 items（签到本来也从待办里摘掉了），只画卡。
-  if (isSignView) {
-    html += signList.length
-      ? cxSignCardHtml(Object.assign({}, d, { signs: signList }))
-      : '<div class="card cx-signcard"><div class="cx-signhd"><b>签到</b>' +
-        '<span class="cx-signidle">现在没有要签的</span></div></div>';
-  } else if (!items.length) {
+  // 🔴 2026-11-24 U73：「签到」这颗药丸的内容就是原来那张签到卡。
+  // 🔴 2026-11-28 U122：签到有自己一整页了（signPaint），学习通这页不再画签到卡 ——
+  //    同一件事在两处显示，用户分不清哪边是「真的」。
+  if (!items.length) {
     html += '<p class="cx-note">' +
       (all.length ? '暂无'
                   : (missedN
@@ -13432,6 +13821,23 @@ const ABOUT_QQ = '1135309695';
  * 文案是正常软件话术，一句一件事，不写接口 / 版本号机制这类内部说法。
  */
 const BUILTIN_CHANGELOG = [
+  { v: '1.0.4', date: '2026-11-28', groups: [
+      { t: '新功能', items: [
+          '学习页顶上多了「签到」，和「学习通」「中国大学 MOOC」并排',
+          '老师一发起签到，学习页顶上出来一条「正在签到」，点一下直接进那一场',
+          '「我的」多了插件市场（在课程调整和权限中间）：插件在 GitHub 上下载，能更新、能删除',
+          '市场底部「我也做一个」，点了直接去 GitHub 交插件'
+      ]},
+      { t: '学习助手', items: [
+          '改课表能辨别周了',
+          '能开热水，查电费网费，跳转淘宝等',
+          '回答更短，不再来回说「正在查询」'
+      ]},
+      { t: '聊天气泡优化', items: [
+          '对话改成左右气泡，自己说的在右边，它答的在左边',
+          '气泡跟着字数走，一句话就一小块'
+      ]}
+  ]},
   { v: '1.0.3', date: '2026-11-28', groups: [
       { t: '新功能', items: [
           '课表顶栏加入学习助手，问一句就能查课表、查电费；密钥只保存在本机'
@@ -13643,8 +14049,59 @@ function openLogSheet() {
   $('sheetMask').hidden = false;
 }
 
-/** 发现新版本时的弹层：只给「去更新」一条路，不写「关闭」（上面已有叉）。 */
-function openUpdateSheet(info) {
+/* ===== 更新之后第一次打开：弹一次「这次改了什么」（2026-11-28 U126）=====
+ *
+ * 用户原话：「还有每次更新后做一个弹窗，提示这次的改动」。
+ *
+ * 判断靠本机记的「上次打开时的版本号」：跟当前不一样 = 刚升级过。
+ * 🔴 全新安装（本机没有记录）**不弹** —— 他第一次用，没有任何东西「变了」，
+ *    一开就弹一屏更新说明只会让他以为装错了版本。
+ * 🔴 只弹当前这一版，不弹历史：把 BUILTIN_CHANGELOG 全列出来是「关于 →
+ *    更新日志」那一页的活，升级弹窗只该说这一次的几行。
+ * 🔴 先记账再弹：用户中途杀掉进程，下次打开不该再被同一份说明烦一遍。
+ */
+const KEY_SEEN_VER = 'zt.seenVer';
+
+function whatsNewCheck() {
+  const cur = String(APP_VERSION || '');
+  if (!cur) return;
+  let seen = '';
+  try { seen = String(store.get(KEY_SEEN_VER, '') || ''); } catch (e) { seen = ''; }
+  if (seen === cur) return;
+  try { store.set(KEY_SEEN_VER, cur); } catch (e) { /* 存不了也能看 */ }
+  if (!seen) return;                          // 全新安装，不弹
+  const entry = BUILTIN_CHANGELOG.filter((e) => e.v === cur)[0];
+  if (!entry) return;                         // 这一版没写日志，不弹空的
+  // 首屏还在动（开屏动画、后台检查）时弹出来像抢屏。等一下；
+  // 如果那会儿正开着别的弹层，再让一步 —— 但最多让三次，不能永远不出现。
+  let waits = 0;
+  const show = () => {
+    const mask = $('sheetMask');
+    if (mask && !mask.hidden && waits < 3) { waits++; setTimeout(show, 2200); return; }
+    openWhatsNew(entry);
+  };
+  setTimeout(show, 900);
+}
+
+function openWhatsNew(entry) {
+  const shell = $('sheetBody').parentElement;
+  // wn-sheet：固定高度 + flex 一列（见 app.css）。只给这一个弹层，
+  // 「关于 → 更新日志」那一页没有按钮，不需要定高。
+  if (shell) shell.classList.add('log-sheet', 'wn-sheet');
+  const groups = (entry.groups || []).map((g) =>
+    '<div class="log-gt">' + esc(g.t) + '</div>' +
+    (g.items || []).map((s) => '<div class="log-li">' + esc(s) + '</div>').join('')
+  ).join('');
+  $('sheetBody').innerHTML =
+    '<div class="sh-title">已经更新到 v' + esc(entry.v) + '</div>' +
+    '<div class="sh-sub">这次改的是这些。以前的版本在「关于 → 更新日志」里。</div>' +
+    '<div class="log-wrap">' + groups + '</div>' +
+    '<div class="sheetbtns"><button class="btn primary" id="wnOk">知道了</button></div>';
+  $('sheetMask').hidden = false;
+  $('wnOk').addEventListener('click', closeSheet);
+}
+
+/** 发现新版本时的弹层：只给「去更新」一条路，不写「关闭」（上面已有叉）。 */function openUpdateSheet(info) {
   const notes = (info.notes || []).map((s) =>
     '<div class="about-logline">' + esc(s) + '</div>').join('');
   $('sheetBody').innerHTML =
@@ -13654,6 +14111,19 @@ function openUpdateSheet(info) {
     '<div class="sheetbtns"><button class="btn primary" id="updGo">去更新</button></div>';
   $('sheetMask').hidden = false;
   $('updGo').addEventListener('click', () => {
+    // U125：先让 App 自己下载、自己起名，下完直接弹安装。
+    // 🔴 不能交给浏览器：Gitee 的附件一律回 application/zip（文件其实是 .apk），
+    //    手机下载器据此补后缀，用户下到的是「压缩包」，点开装不上。
+    //    国内网络读不到 GitHub、落到 Gitee 备援的人躲不开这一步。
+    const ver = String(info.version || APP_VERSION).replace(/[^0-9.]/g, '') || 'latest';
+    const dl = (window.NativeApi && typeof NativeApi.downloadApk === 'function')
+      ? NativeApi.downloadApk(info.url, 'jiangcaitong-' + ver + '.apk')
+      : 'none';
+    if (dl === 'ok') {
+      toast('正在下载，完成后会弹安装（没弹就点通知栏那一条）', 4000);
+      return;
+    }
+    // 下载器起不来（旧壳、存储满了、被系统拦）：退回原来的浏览器打开。
     const ok = (window.NativeApi && typeof NativeApi.openUrl === 'function')
       ? NativeApi.openUrl(info.url) : false;
     if (!ok) {
@@ -13777,6 +14247,12 @@ function renderPermEntry() {
 }
 
 $('rowPerm').addEventListener('click', () => { renderPerm(); switchTab('perm'); });
+// 插件市场（U118）：和「权限」同一张卡的第一行，点开就是市场。
+// U119：点开的不再是弹层，而是单独一页（#page-plugins）。
+$('rowPlugin').addEventListener('click', () => { openPluginMarket(); });
+$('plgBack').addEventListener('click', () => { switchTab('me'); });
+$('plgReload').addEventListener('click', () => { pluginPaintList(true); });
+$('plgSubmit').addEventListener('click', () => { openPluginSubmit(); });
 $('permBack').addEventListener('click', () => { switchTab('me'); });
 // 从系统设置回来 ⇒ 重新看一遍。不重看的话，用户明明刚打开通知，
 // 回来这一页还写着「收不到提醒」—— 那会让他以为设置没生效。
@@ -14588,6 +15064,7 @@ const WT = {
   balErr: '',
   devs: [],
   devErr: '',
+  lastErr: '',   // U107：最近一次启动失败的原因，给学习助手转述用
   loadedAt: 0,  // 余额最后一次读到的时间（ms）
   expired: false, // 登录态过期了 —— 过期卡已经解释过，别再在别处重复
 
@@ -17461,12 +17938,18 @@ async function wtStart(did, name) {
   try {
     const r = await api('/api/water/start', { did });
     if (!r || !r.ok) {
-      if (r && r.kind === 'auth') { wtExpire('device'); return false; }
+      if (r && r.kind === 'auth') {
+        WT.lastErr = '饮水机登录过期了，去「我的 → 账号管理」重登一次。';
+        wtExpire('device'); return false;
+      }
       // 业务错误逐条说清楚（欠费 / 没签约 / 没绑卡 / 没权限…），
       // 这些**不是**重试能救的，所以要停 4 秒让人读完。
-      toast(wtErrText(r && r.kind, r && r.error), 4000);
+      const txt = wtErrText(r && r.kind, r && r.error);
+      WT.lastErr = txt;          // U107：学习助手要拿它说人话，不能只说「失败了」
+      toast(txt, 4000);
       return false;
     }
+    WT.lastErr = '';
     toast(r.msg || '已经启动了，接完自动结算', 3000);
     // 记下「你在本机点了启动」，提醒条要用它。
     // 🔴 这只是**本机记录**，不是服务端状态 —— /ui/app/master 没有
@@ -17482,6 +17965,7 @@ async function wtStart(did, name) {
     wtLiveStartPoll();
     return true;
   } catch (e) {
+    WT.lastErr = '启动失败：' + e.message;
     toast('启动失败：' + e.message, 4000);
     return false;
   } finally {
@@ -18878,20 +19362,21 @@ async function zlOrderTry(sess, devId, isn) {
 async function zlWaterStart(d) {
   const apiObj = window.NativeApi;
   const sess = zlSess();
-  if (!sess) { zlLoginFlow(); return; }
-  if (zlLive()) { toast('上次的热水还没关 —— 先把它关掉'); openZlSheet(); return; }
-  if (!apiObj || !apiObj.zlBle) { toast('这个版本没有蓝牙能力，装最新的 APK'); return; }
+  // U107：给调用方（学习助手）一个明确结果；页面上的 toast / 进度条照旧。
+  if (!sess) { zlLoginFlow(); return { ok: false, msg: '住理还没登录，去「生活 → 住理生活」登一次。' }; }
+  if (zlLive()) { toast('上次的热水还没关 —— 先把它关掉'); openZlSheet(); return { ok: false, msg: '上次的热水还没关，先把它关掉。' }; }
+  if (!apiObj || !apiObj.zlBle) { toast('这个版本没有蓝牙能力，装最新的 APK'); return { ok: false, msg: '这个版本开不了热水，装最新的安装包。' }; }
 
   const perm = apiObj.zlBle.perm();
-  if (perm === 'none') { toast('这台手机没有蓝牙，开不了热水'); return; }
+  if (perm === 'none') { toast('这台手机没有蓝牙，开不了热水'); return { ok: false, msg: '这台手机没有蓝牙，开不了热水。' }; }
   if (perm === '0') {
     apiObj.zlBle.ask();
     toast('给一次蓝牙权限，再点「开始」');
-    return;
+    return { ok: false, msg: '先给一次蓝牙权限，再说一次。' };
   }
 
   const devId = zlDevId(d);
-  if (!devId) { toast('这个码里没有设备号'); return; }
+  if (!devId) { toast('这个码里没有设备号'); return { ok: false, msg: '还没加过热水表，去「生活 → 住理生活」扫一次表上的码。' }; }
 
   const req = 'z' + Date.now().toString(36);
   const name = zlDevName(d);
@@ -18969,17 +19454,22 @@ async function zlWaterStart(d) {
       at: Math.floor(Date.now() / 1000), devName: name,
     });
     if (reallyRunning === false) {
-      // 设备明说没在供水：不要报「成功」，给用户能做的下一步。
-      // 🔴 2026-11-28：措辞别再提「余额/设备状态不对」——真机上余额是够的，
-      //    这么写会误导人。只说水表没确认到出水，给一条明确的下一步。
-      zlProg('水表那边没确认到出水，看一下水表；没出水再到住理 App 确认', true);
-      toast('水表没确认到出水，请到住理 App 看一眼');
+      // 🔴 U110（2026-11-28 真机）：「水表那边没确认到出水」被用户当成失败 ——
+      //    实际上水已经出来了。查 `device.running` 是下单后立刻查的，
+      //    水表回报有延迟，这时候读到 false 很正常。
+      //    所以：**下单成功就算开成功**，只是措辞留一句「要是没出再看一眼」。
+      zlProg('开水指令已送出 · 水应该出来了；洗完点同一颗按钮关掉');
+      toast('开水指令已送出');
     } else {
       zlProg('开水指令已送出 · 请确认水已流出，洗完点同一颗按钮关掉');
       toast('开水指令已送出');
     }
     ZL.billsTry = 0;
     zlLoadBills(true);
+    return { ok: true, unsure: reallyRunning === false,
+      msg: reallyRunning === false
+        ? '热水开了（水表还没回报，水应该已经出来了）。洗完记得关。'
+        : '热水开了，洗完记得点一下关掉。' };
   } catch (e) {
     const msg = (e && e.message) || '不知道哪一步出的错';
     // 🔴 2026-11-24 真机实测回来的那句话：服务端在 create_order 这一步回
@@ -19018,6 +19508,17 @@ async function zlWaterStart(d) {
             ? '没开成：住理只认它自己 App 的支付渠道。先去住理 App 扫这台表的码用一次，再回来试'
             : '没开水：' + msg, true);
     }
+    // 给学习助手的短句：面板上的长文案不动，这里只说人能马上做的一件事。
+    return {
+      ok: false,
+      msg: needCap
+        ? '住理要一次图形验证码，去「我的 → 账号管理」重登住理。'
+        : expired
+          ? '住理登录过期了，去「我的 → 账号管理」重登一次。'
+          : channel
+            ? '住理不让第三方下单，先在住理 App 里用一次再回来。'
+            : ('没开成：' + msg)
+    };
   } finally {
     apiObj.zlBle.close(req);
     renderLifeWidgets();
@@ -20409,9 +20910,23 @@ async function jfAskAcc() {
   }
 }
 
+/* ============ 生活页组件（2026-11-24 U67）============
+ *
+ * 每个组件 = 这里的一项 + index.html 里一张 `<section class="lifew" data-life="xx">`
+ * 卡片（排版照现有那四张：标题 + 标签、中间两个真数、底部状态 + 一个入口）。
+ * 加新组件只做这两件事，卡片和「+ 组件」面板会自动跟上。
+ *
+ * 🔴 2026-11-28：用户要「小组件能下载 / 删除，以后新做的默认不下载」，同时
+ *    明确 **「+ 组件」面板不要改**（仍旧是勾选显示 / 隐藏）。所以这里先把以后
+ *    做下载面板要用的元数据补上，界面行为一个字没动：
+ *      · `pre`  —— 出厂是不是已经装上（现有四张 true；以后新组件写 false）
+ *      · `desc` —— 一句话说明，将来放在下载面板的名字下面
+ *    lifeOn() 的默认值改成按 `pre` 算（现在等价于「四张全装」）。
+ */
 const LIFE_WIDGETS = [
   {
-    id: 'hui', name: '慧生活798', tag: '慧生活798',
+    id: 'hui', name: '慧生活798', tag: '慧生活798', pre: true,
+    desc: '饮水机、积分、每日任务，在酱菜通里直接开关',
     state: () => {
       const dev = (WT.accounts && WT.accounts.device) || null;
       const n = wtDevRows().length;
@@ -20424,7 +20939,8 @@ const LIFE_WIDGETS = [
     // 🔴 2026-11-24 U73：用户「住理生活……直接在酱菜通上面记录二维码，随时开关
     //    热水，顺便记录花费」。数据全在本机（CFG.zlDevs / KEY.zlSpend），
     //    不需要登录、也不碰慧生活798 的任何账号（用户：「798 用现在的，不要动」）。
-    id: 'zl', name: '住理生活', tag: '洗澡热水',
+    id: 'zl', name: '住理生活', tag: '洗澡热水', pre: true,
+    desc: '洗澡热水：记设备、开关水、记这个月花了多少',
     state: () => {
       // 🔴 1.3.15：正在供水时这句必须让位 —— 卡上写「还没记录设备」，
       //    可水正在流，人会以为自己没开。
@@ -20440,16 +20956,18 @@ const LIFE_WIDGETS = [
   {
     // 🔴 2026-11-24 U75：用户给了 QuickJump，让把「快捷跳转」做成组件。
     //    卡片上只摆最常用的五个入口，七条全的在「全部」里（见 JUMP_ENTRIES）。
-    id: 'jump', name: '快递取件', tag: '取件码',
+    id: 'jump', name: '快递取件', tag: '取件码', pre: true,
+    desc: '菜鸟、淘宝、拼多多、抖音、京东的取件码，一点直达',
     state: () => JUMP.text || '● 一点直达取件码',
     manage: () => openJumpSheet(),
   },
   // 2026-11-24：原「学校的事」组件删掉 —— 用户「还没做好，去掉」。
-  // 以后要加新组件，照上面那项补一条即可（卡片 + +组件 面板自动出现）。
+  // 以后要加新组件，照上面那项补一条（记得写 pre: false + desc），卡片和组件库自动出现。
   {
     // U92：智慧江财。电费余额真读（选过房间），网费显示推算的到期日，
     // 点「查询」现场拉 —— 接口层在 native.js 的 JfApi。
-    id: 'jf', name: '智慧江财', tag: '电费 · 网费',
+    id: 'jf', name: '智慧江财', tag: '电费 · 网费', pre: true,
+    desc: '宿舍还剩多少电、网费哪天到期',
     state: () => {
       const d = jfData();
       if (!jfAcc()) return '● 填一卡通号后选宿舍';
@@ -20463,37 +20981,36 @@ const LIFE_WIDGETS = [
   },
 ];
 
-/** 当前启用的组件 id 列表（null = 全开）。 */
+/** 出厂就装上的那几个（pre 不是 false）。 */
+function lifeDefaults() {
+  return LIFE_WIDGETS.filter((w) => w.pre !== false).map((w) => w.id);
+}
+
+/** 已经下载到生活页的组件 id 列表。
+ *  🔴 U117：数组为空 = 一个都没下载（空状态卡出来）—— 和以前「全部勾掉」同义。
+ *    老配置里存的是「勾选显示的那几个」，语义正好对得上，不用迁移。 */
 function lifeOn() {
-  const v = CFG.lifeWidgets;
-  if (!Array.isArray(v)) return LIFE_WIDGETS.map((w) => w.id);
-  // 🔴 2026-11-24 U73：住理生活是新组件。老用户的 lifeWidgets 是数组、
-  //    里面没有 'zl' —— 不补的话他升级完在生活页什么都看不到（还以为是坏了）。
-  //    只补**一次**：补完打上 zlAdded，之后他自己在「+ 组件」里勾掉就不再管
+  let v = CFG.lifeWidgets;
+  if (!Array.isArray(v)) {
+    const d = lifeDefaults();
+    CFG.lifeWidgets = d;
+    try { store.set(KEY.settings, CFG); } catch (e) { /* 存不了不影响显示 */ }
+    return d.slice();
+  }
+  // 🔴 2026-11-24 U73/U75/U90：住理生活、快递取件、智慧江财都是后来加的组件。
+  //    老用户的 lifeWidgets 里没有它们 —— 不补的话他升级完在生活页什么都看不到
+  //    （还以为是坏了）。只补**一次**：补完打上标记，之后他自己勾掉就不再管
   //    （尊重他的选择，不能每次启动都硬塞回来）。
-  if (!CFG.zlAdded) {
-    CFG.zlAdded = true;
-    if (v.indexOf('zl') < 0) v.push('zl');
+  [['zl', 'zlAdded'], ['jump', 'jumpAdded'], ['jf', 'jfAdded']].forEach(([id, flag]) => {
+    if (CFG[flag]) return;
+    CFG[flag] = true;
+    if (v.indexOf(id) < 0) v.push(id);
     CFG.lifeWidgets = v;
     try { store.set(KEY.settings, CFG); } catch (e) { /* 存不了不影响显示 */ }
-  }
-  // 🔴 2026-11-24 U75：快递取件也是新组件，同上 —— 只自动补**一次**。
-  if (!CFG.jumpAdded) {
-    CFG.jumpAdded = true;
-    if (v.indexOf('jump') < 0) v.push('jump');
-    CFG.lifeWidgets = v;
-    try { store.set(KEY.settings, CFG); } catch (e) { /* 存不了不影响显示 */ }
-  }
-  // 🔴 2026-11-25 U90：智慧江财也是新组件，同上 —— 只自动补**一次**。
-  if (!CFG.jfAdded) {
-    CFG.jfAdded = true;
-    if (v.indexOf('jf') < 0) v.push('jf');
-    CFG.lifeWidgets = v;
-    try { store.set(KEY.settings, CFG); } catch (e) { /* 存不了不影响显示 */ }
-  }
+  });
   // 🔴 2026-11-24：老配置里存着已删除组件的旧 id（如 school）。
   //    原样返回会让「所有卡片都隐藏」但「数组非空、空状态也不显示」⇒ 整页空白。
-  //    滤掉不存在的 id 后：真一个都没勾 = 空数组，空状态卡才会出来。
+  //    滤掉不存在的 id 后：真一个都没下载 = 空数组，空状态卡才会出来。
   const ids = LIFE_WIDGETS.map((w) => w.id);
   const clean = v.filter((id) => ids.indexOf(id) >= 0);
   if (clean.length !== v.length) {
@@ -20572,6 +21089,8 @@ function renderLifeWidgets() {
   });
   // 🔴 2026-11-24 U68：全部组件都勾掉时 show 空状态卡，否则藏起来。
   const empty = $('lifeEmpty');
+  // 插件卡上的「两个数」也会变（余额、第几周…），一起重画。
+  pluginPaintStats();
   if (empty) empty.hidden = on.length > 0;
 }
 
@@ -20594,34 +21113,921 @@ function closeLifeDetail() {
   return true;
 }
 
-/** 「+ 组件」：勾选要显示哪几张卡，以后加新组件这一页自动多一项。 */
+/* ===== 插件市场（2026-11-28 U118）=====
+ * 用户原话：「加一个插件市场，插件只能在 GitHub 上下载，由你改编然后上传」
+ *          「插件是不是也能更新」
+ *          「能不能加一个别人也能提交插件的功能，就出现在插件市场里面，
+ *            还有下载的插件也在插件市场里面管理」。
+ *
+ * 四处刻意的限制，都是有意的：
+ *  ① 只有 GitHub 一个源（不写 Gitee 备援）。插件会被当代码执行 —— 多一个源，
+ *     就多一个能改 App 行为的地方。Gitee 那份镜像照旧同步源码，但 App **不读它**；
+ *     域名白名单另在 native.js 的 pluginFetch 里卡一道。
+ *  ② 清单里带 size / sha256，装之前先核；核不上就不装。宁可装不上，也不能装一个
+ *     「看着像、其实被动过」的文件。
+ *  ③ 插件只能「登记一张卡」，不能往页面里塞 HTML：宿主给什么字段就画什么
+ *     （名字 / 标签 / 两个数 / 一句状态 / 一个按钮），排版和现有四张卡一模一样。
+ *     界面不会花，插件也点不坏别处。
+ *  ④ 别人交上来的插件**经我审核后再上架**，App 不直接装用户发来的文件 ——
+ *     不然「只能在 GitHub 下载」这条就白写了。
+ *
+ * 插件包就是一个 .js，长这样（排版不用它管）：
+ *   plugin({
+ *     name: '签到提醒', tag: '学习通',
+ *     stats: () => [{ k: '待签', v: '2' }],
+ *     state: () => '● 下一节 10:00 开始',
+ *     action: { label: '去看看', run() { plugin.toast('……'); } }
+ *   });
+ */
+/* 🔴 raw.githubusercontent.com **区分 owner 大小写**：仓库是 `Vesper-a11y`，
+ *    写成小写 `vesper-a11y` 在真机上直接连不上（实测 000 / 404），
+ *    而 github.com 那层是不区分的（会 302 到规范地址）。
+ *    所以这里写死规范大小写，不要再化简成 UPDATE_OWNER。 */
+const PLUGIN_RAW = 'https://raw.githubusercontent.com/Vesper-a11y/' + UPDATE_REPO + '/main/';
+const PLUGIN_INDEX_URLS = [
+  PLUGIN_RAW + 'plugins/index.json',
+  'https://github.com/' + UPDATE_OWNER + '/' + UPDATE_REPO + '/releases/latest/download/plugins.json'
+];
+/* 上限 8 个：这是个手机桌面，不是应用商店。装太多生活页会滚不到底。 */
+const PLUGIN_MAX_N = 8;
+const PLG = { index: null, at: 0, err: '' };
+/* 跑起来之后登记在那儿的卡片定义（key 是 `plg:<id>`）。 */
+const PLG_W = {};
+
+/** 已装插件 `{id:{ver,code,size,at}}`。 */
+function pluginInstalled() {
+  const v = store.get(KEY.plugins, {});
+  return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+}
+
+/** 插件代码单独存一份（`zt.plugin.<id>`），卸载时一起删。 */
+function pluginCodeKey(id) { return 'zt.plugin.' + id; }
+
+/** 清单里的这个是不是比装着的那个新。
+ *  有数字 code 就比 code（1.0.10 和 1.0.9 才不会比反），没有才退回比版本字符串。 */
+function pluginNewer(p, cur) {
+  if (!cur) return true;
+  const a = Number(p.code) || 0;
+  const b = Number(cur.code) || 0;
+  if (a && b) return a > b;
+  return String(cur.ver || '') !== String(p.ver || '');
+}
+
+/** 装着的里面有几个能升级。 */
+function pluginUpdates() {
+  const idx = PLG.index;
+  if (!idx || !Array.isArray(idx.plugins)) return 0;
+  const has = pluginInstalled();
+  let n = 0;
+  idx.plugins.forEach((p) => { if (pluginNewer(p, has[p.id])) n++; });
+  return n;
+}
+
+/** 「我的」那行右边的字：可更新 > 已装 > 没装。 */
+function pluginEntryText() {
+  const up = pluginUpdates();
+  if (up) return up + ' 个可更新';
+  const n = Object.keys(pluginInstalled()).length;
+  return n ? '已装 ' + n + ' 个' : '还没装插件';
+}
+
+function pluginPaintEntry() {
+  const el = $('mePlugin');
+  if (el) el.textContent = pluginEntryText();
+}
+
+/** 清单里一条 → 规整成固定形状。字段不全的直接丢掉（宁可少一个，不装半个）。 */
+function pluginNorm(raw) {
+  const p = raw || {};
+  const id = String(p.id || '').trim();
+  if (!/^[a-z0-9][a-z0-9_-]{1,30}$/.test(id)) return null;
+  const file = String(p.file || '').trim();
+  const ver = String(p.ver || p.version || '').trim();
+  if (!file || !ver) return null;
+  return {
+    id: id,
+    name: String(p.name || id).slice(0, 20),
+    tag: String(p.tag || '插件').slice(0, 10),
+    desc: String(p.desc || '').slice(0, 90),
+    ver: ver.slice(0, 20),
+    code: parseInt(p.code, 10) || 0,
+    file: file,
+    size: parseInt(p.size, 10) || 0,
+    sha256: String(p.sha256 || '').toLowerCase(),
+    need: String(p.need || '').slice(0, 20),
+    // U119：卡片上要写「谁提交的、什么时候」。这两个字段缺了也照装 ——
+    // 早期清单没有它们，不能因此把插件当坏的。
+    by: String(p.by || '').slice(0, 32),
+    at: String(p.at || '').slice(0, 20),
+    // 头衔：作者 / 维护者 / 贡献者。U120 用户要求自己的插件标「作者」。
+    role: String(p.role || '').slice(0, 6)
+  };
+}
+
+/** 拉清单。只用 GitHub；两个固定地址，第一个读不到才试第二个。
+ *  🔴 地址里不能带版本号：带了就变成「每个包只读自己那一版」，永远看不到新版。 */
+async function pluginLoadIndex(force) {
+  if (PLG.index && !force) return PLG.index;
+  PLG.err = '';
+  if (!NATIVE) { PLG.err = '网页版装不了插件，装到手机上才能用'; return null; }
+  for (let i = 0; i < PLUGIN_INDEX_URLS.length; i++) {
+    let r = null;
+    try { r = await api('/api/plugin/fetch', { url: PLUGIN_INDEX_URLS[i] }); } catch (e) { r = null; }
+    if (!r || !r.ok) continue;
+    let j = null;
+    try { j = JSON.parse(String(r.body || '')); } catch (e) { continue; }
+    const list = (j && Array.isArray(j.plugins)) ? j.plugins : [];
+    PLG.index = { plugins: list.map(pluginNorm).filter(Boolean).slice(0, PLUGIN_MAX_N) };
+    PLG.at = Math.floor(Date.now() / 1000);
+    return PLG.index;
+  }
+  PLG.err = '连不上 GitHub';
+  return null;
+}
+
+/** 算 sha256。老内核没有 crypto.subtle 时返回 null —— 那就只靠大小核
+ *  （所以清单里的 size 我一定写，它是最后一道）。 */
+async function pluginSha(text) {
+  try {
+    const buf = new TextEncoder().encode(text);
+    const d = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(d)).map((b) => ('0' + b.toString(16)).slice(-2)).join('');
+  } catch (e) { return null; }
+}
+
+/** 下载插件代码并核对。清单里的 file 可以是相对路径，也可以是整条 https 地址。 */
+async function pluginFetchCode(p) {
+  const raw = String(p.file || '');
+  const url = /^https?:\/\//i.test(raw) ? raw : PLUGIN_RAW + raw.replace(/^\/+/, '');
+  let r = null;
+  try { r = await api('/api/plugin/fetch', { url: url }); } catch (e) { r = null; }
+  if (!r || !r.ok) return { ok: false, err: (r && r.error) || '没下下来' };
+  const text = String(r.body || '');
+  // 先核大小：清单写了就必须一个字节都不差（差一点就说明发的不是同一份）。
+  if (p.size && text.length !== p.size) return { ok: false, err: '文件大小对不上' };
+  if (p.sha256) {
+    const got = await pluginSha(text);
+    if (got && got !== p.sha256) return { ok: false, err: '文件校验没通过' };
+  }
+  return { ok: true, text: text };
+}
+
+/** 跑插件代码，拿它登记的那张卡。
+ *  🔴 只交出几个函数（toast / data / week），不把 window 递进去 ——
+ *     插件不该能改别处。 */
+function pluginParse(code, meta) {
+  const id = meta.id;
+  const out = { id: id, name: meta.name || id, tag: meta.tag || '插件', ver: String(meta.ver || '') };
+  const api2 = {
+    app: APP_VERSION,
+    widget(def) {
+      const d = def || {};
+      out.name = String(d.name || out.name || id).slice(0, 20);
+      out.tag = String(d.tag || out.tag || '插件').slice(0, 10);
+      out.stats = (typeof d.stats === 'function') ? d.stats : null;
+      out.state = (typeof d.state === 'function') ? d.state : null;
+      out.action = (d.action && typeof d.action === 'object') ? d.action : null;
+      /* 自己排版（U130）：给了 html 就不走宿主那套模板，整张卡由插件画。
+         字符串 = 画一次就完了；函数 = 每次重画都重新求值（适合「余额变了要跟着变」）。 */
+      out.custom = (d.html == null) ? null : {
+        html: d.html,
+        css: String(d.css || ''),
+        on: (d.on && typeof d.on === 'object') ? d.on : null,
+        refresh: Math.max(0, Number(d.refresh) || 0)
+      };
+      /* 自己的一整页（U130）：用户「不要限制插件，不是只能显示在生活组件里面」。
+         给了 page.html，点生活页那张卡就进这一页，整页都由插件画。 */
+      out.page = null;
+      if (d.page && typeof d.page === 'object' && d.page.html != null) {
+        const pg = d.page;
+        out.page = {
+          title: String(pg.title || d.name || out.name || id).slice(0, 20),
+          html: pg.html,
+          css: String(pg.css || ''),
+          on: (pg.on && typeof pg.on === 'object') ? pg.on : null,
+          refresh: Math.max(0, Number(pg.refresh) || 0)
+        };
+      }
+      /* 外观（U130）：用户「也可以做外观什么的插件」「不要固定模板限制」。
+         这一段 CSS 不走卡片作用域，直接作用在整页上 —— 换主题色、改圆角、
+         改字体都靠它。装的时候写进 <style id="plgstyle-<id>">，卸的时候删掉。 */
+      out.style = String(d.style || '');
+    },
+    toast(msg, ms) { toast(String(msg || ''), ms || 2000); },
+    /* 插件自己那一页里想返回（用户点了插件自己画的「返回」）。 */
+    back() { closePluginPage(); },
+    data(k, v) {
+      const key = 'zt.plg.' + id + '.' + String(k || '');
+      if (arguments.length < 2) return store.get(key, null);
+      return store.set(key, v);
+    },
+    week() { try { return currentWeek(); } catch (e) { return 0; } },
+    total() { try { return totalWeeks(); } catch (e) { return 0; } },
+    today() {
+      const d = new Date();
+      const m = d.getMonth() + 1;
+      const dd = d.getDate();
+      const wd = '日一二三四五六'.charAt(d.getDay());
+      return { y: d.getFullYear(), m: m, d: dd, w: wd, text: m + '月' + dd + '日 周' + wd };
+    }
+  };
+  // sourceURL 指到插件 id：万一它抛错，日志里能看出是谁。
+  const fn = new Function('plugin',
+    '"use strict";\n' + code + '\n//# sourceURL=jct-plugin-' + id + '.js');
+  /* 🔴 插件里写 `plugin({...})` 的那个 plugin 是**函数**，而插件在 stats()/state()
+   *    里还会写 `plugin.week()`。所以这些方法必须挂在同一个函数对象上 ——
+   *    只把 def 转出去、方法留在 api2 上的话，插件里一句 plugin.week() 就是
+   *    「is not a function」，整个 state() 抛掉，卡片底部就是空白。
+   *    （U118 自己踩的：示例插件一上线，状态栏空着。） */
+  const entry = function (def) { api2.widget(def); };
+  Object.keys(api2).forEach((k) => { if (k !== 'widget') entry[k] = api2[k]; });
+  fn(entry);
+  return out;
+}
+
+/* ===== 插件自己排版（2026-11-28 U130）=====
+ *
+ * 用户原话：「不要限制插件」。之前插件只能交「名字 / 标签 / 两个数 / 一句话 /
+ * 一个按钮」这五样，长相由宿主定 —— 卡片长得像便利贴，插件写不进自己的排版。
+ * 这里放开：插件交一段 HTML（可以带一段 CSS），整张卡自己画。
+ * 老写法（stats/state/action）原样留着，已经装在手机上的插件不会被这次改动弄坏。
+ *
+ * 三道边界，都是为了让「放开」不等于「失控」：
+ *   ① HTML 先过 plgCleanHtml：script / iframe / form 整块删，on* 属性删，
+ *      javascript: 链接删。插件要在页面里跑 JS 有自己的入口（插件代码本身），
+ *      不必借 HTML 再插一段 —— 那只会绕过宿主对卡片这块区域的掌控。
+ *   ② CSS 先过 plgScopeCss：每条选择器前面挂这张卡的 data-life，插件写
+ *      `body{display:none}` 也伤不到页面别处，写 `:root{--x:1}` 只改自己这张卡。
+ *   ③ 外壳仍是宿主的 .lifew（白底、圆角、投影），插件只管壳里的内容 ——
+ *      不然一张卡能画出跟页面完全无关的东西，看着像渲染坏了。
+ */
+function plgScopeSel(head, scope) {
+  return String(head || '').split(',').map((one) => {
+    const s = one.trim();
+    if (!s) return '';
+    if (s === ':root' || s === 'html' || s === ':host' || s === 'body') return scope;
+    if (s.charAt(0) === '@') return s;
+    return scope + ' ' + s;
+  }).filter(Boolean).join(',');
+}
+
+/** 给插件 CSS 的每条规则挂上这张卡的作用域。@media/@supports 往里走一层，
+ *  @keyframes/@font-face 原样放行（名字重了只影响它自己那张卡）。 */
+function plgScopeCss(css, scope) {
+  const src = String(css || '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/@import[^;]*;?/gi, '');     // @import 能拉外部样式表，一律不要
+  let out = '';
+  let buf = '';
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === '"' || ch === "'") {        // 字符串整段抄走：里面的 { } 不参与配对
+      let j = i + 1;
+      while (j < src.length && src[j] !== ch) { if (src[j] === '\\') j++; j++; }
+      buf += src.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    if (ch !== '{') { buf += ch; i++; continue; }
+    const head = buf.trim();
+    buf = '';
+    let depth = 1;
+    let j = i + 1;
+    while (j < src.length && depth > 0) {
+      const c = src[j];
+      if (c === '"' || c === "'") {
+        let k = j + 1;
+        while (k < src.length && src[k] !== c) { if (src[k] === '\\') k++; k++; }
+        j = k + 1;
+        continue;
+      }
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+      if (depth > 0) j++;
+    }
+    const body = src.slice(i + 1, j);
+    if (/^@(media|supports|container|layer)\b/i.test(head)) {
+      out += head + '{' + plgScopeCss(body, scope) + '}';
+    } else if (head.charAt(0) === '@') {
+      out += head + '{' + body + '}';
+    } else if (head) {
+      out += plgScopeSel(head, scope) + '{' + body + '}';
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
+/** 插件交上来的 HTML 过一遍：能不执行的东西一个都别留。 */
+function plgCleanHtml(html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = String(html == null ? '' : html);
+  const root = tpl.content;
+  const bad = root.querySelectorAll('script,iframe,frame,frameset,object,embed,link,meta,base,form');
+  for (let i = 0; i < bad.length; i++) {
+    if (bad[i].parentNode) bad[i].parentNode.removeChild(bad[i]);
+  }
+  const all = root.querySelectorAll('*');
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i];
+    const attrs = Array.prototype.slice.call(el.attributes || []);
+    for (let k = 0; k < attrs.length; k++) {
+      const name = attrs[k].name;
+      const low = name.toLowerCase();
+      const val = String(attrs[k].value || '');
+      if (low.indexOf('on') === 0) { el.removeAttribute(name); continue; }
+      if ((low === 'href' || low === 'src' || low === 'xlink:href' ||
+           low === 'formaction' || low === 'action') &&
+          /^\s*(javascript|vbscript|data:text\/html)/i.test(val)) {
+        el.removeAttribute(name);
+      }
+    }
+  }
+  return tpl.innerHTML;
+}
+
+/** 一张「插件自己画」的卡。
+ *  点页面里带 data-act="名字" 的东西 → 交给插件的 on.名字(元素, 事件)。
+ *  HTML 是函数时每次重画都会重新求值（余额变了、第几周变了都能跟着动），
+ *  但结果跟上次一样就不动 DOM —— 否则重画会清掉输入框、把滚动位置弹回顶部。 */
+function pluginCustomEl(wid, def) {
+  const c = def.custom || {};
+  const s = document.createElement('section');
+  s.className = 'lifew lifew-custom';
+  s.setAttribute('data-life', wid);
+  const css = plgScopeCss(c.css, '[data-life="' + wid + '"]');
+  if (css) {
+    const st = document.createElement('style');
+    st.setAttribute('data-plg', wid);
+    st.textContent = css;
+    s.appendChild(st);
+  }
+  const body = document.createElement('div');
+  body.className = 'plgv';
+  s.appendChild(body);
+  const paint = () => {
+    let raw = '';
+    try {
+      raw = (typeof c.html === 'function') ? c.html() : c.html;
+    } catch (e) {
+      raw = '<div class="plgv-err">这块内容画不出来，更新一下插件试试</div>';
+    }
+    let clean = '';
+    try { clean = plgCleanHtml(raw || ''); } catch (e) { clean = ''; }
+    if (body.__sig === clean) return;
+    body.__sig = clean;
+    const top = body.scrollTop;
+    body.innerHTML = clean;
+    body.scrollTop = top;
+  };
+  def.paint = paint;
+  def.node = s;
+  paint();
+  const fire = (name, el, ev) => {
+    const fn = c.on && c.on[name];
+    if (typeof fn !== 'function') return;
+    try { fn(el, ev); } catch (e) { toast('这个插件出了点问题，更新一下试试', 2400); }
+  };
+  const hitOf = (ev) => {
+    const t = ev.target;
+    const hit = (t && t.closest) ? t.closest('[data-act]') : null;
+    return (hit && s.contains(hit)) ? hit : null;
+  };
+  s.addEventListener('click', (ev) => {
+    const hit = hitOf(ev);
+    if (!hit) {
+      // 没点中插件自己的按钮 → 整张卡是入口，进它自己那一页（有 page 才进）。
+      if (def.page) openPluginPage(wid);
+      return;
+    }
+    fire(hit.getAttribute('data-act'), hit, ev);
+    // 点完顺手重画一次：插件在 on 里改了自己的数据，界面立刻跟上，
+    // 不用再教它「怎么刷新卡片」。（内容没变时 paint 自己不干活。）
+    try { paint(); } catch (e) { /* 画坏了已经有 toast */ }
+  });
+  s.addEventListener('change', (ev) => {
+    const hit = hitOf(ev);
+    if (hit) fire(hit.getAttribute('data-act'), hit, ev);
+  });
+  if (Number(c.refresh) > 0) def.timer = setInterval(paint, Number(c.refresh));
+  return s;
+}
+
+/* ===== 插件自己的一整页（2026-11-28 U130）=====
+ *
+ * 用户：「不要限制插件，不是只能显示在生活组件里面」。
+ * 所以插件除了能画那张卡，还能交一整页：点卡片进来就是它自己的界面，
+ * 标题、排版、按钮全归它，App 只给一块能滚的画布和左上角那颗返回。
+ *
+ * 🔴 所有插件共用 #page-plgpage 这一页，只有内容在换 —— 不按插件各建一页。
+ *    动态插 <section> 的话，返回栈、底部高亮、换页动画都要各自知道「这是哪一页」，
+ *    而它们全都认 SUBPAGES 这张固定表。
+ */
+const PLGP = { wid: '', def: null, timer: 0 };
+
+/** 画一遍当前这一页（内容没变就不动 DOM：不抢焦点、不弹滚动位置）。 */
+function pluginPagePaint() {
+  const def = PLGP.def;
+  const box = $('plgPageBody');
+  const inner = box ? box.querySelector('.plgpg-in') : null;
+  if (!def || !inner) return;
+  const pg = def.page || {};
+  let raw = '';
+  try {
+    raw = (typeof pg.html === 'function') ? pg.html() : pg.html;
+  } catch (e) {
+    raw = '<div class="plgpg-err">这一页画不出来，更新一下插件试试</div>';
+  }
+  let clean = '';
+  try { clean = plgCleanHtml(raw || ''); } catch (e) { clean = ''; }
+  if (inner.__sig === clean) return;
+  inner.__sig = clean;
+  const sc = $('plgPageScroll');
+  const top = sc ? sc.scrollTop : 0;
+  inner.innerHTML = clean;
+  if (sc) sc.scrollTop = top;
+}
+
+function pluginPageStopTimer() {
+  if (PLGP.timer) { clearInterval(PLGP.timer); PLGP.timer = 0; }
+}
+
+/** 进入某个插件自己的页面。 */
+function openPluginPage(wid) {
+  const def = PLG_W[wid];
+  if (!def || !def.page) return false;
+  const box = $('plgPageBody');
+  if (!box) return false;
+  PLGP.wid = wid;
+  PLGP.def = def;
+  box.setAttribute('data-plgpage', wid);
+  const css = plgScopeCss(def.page.css, '[data-plgpage="' + wid + '"]');
+  box.innerHTML = (css ? '<style data-plg="' + wid + '">' + css + '</style>' : '') +
+    '<div class="plgpg-in"></div>';
+  const ti = $('plgPageTitle');
+  if (ti) ti.textContent = def.page.title || def.name || '插件';
+  const sc = $('plgPageScroll');
+  if (sc) sc.scrollTop = 0;
+  pluginPagePaint();
+  pluginPageStopTimer();
+  if (Number(def.page.refresh) > 0) {
+    // 只在看得见的时候刷：切走了还在后台重画，白烧电。
+    PLGP.timer = setInterval(() => {
+      if (CUR_PAGE === 'plgpage') { try { pluginPagePaint(); } catch (e) { /* 下次再说 */ } }
+    }, Number(def.page.refresh));
+  }
+  switchTab('plgpage');
+  return true;
+}
+
+/** 从插件页退回去（左上角返回、或插件自己调 plugin.back()）。 */
+function closePluginPage() {
+  pluginPageStopTimer();
+  PLGP.wid = '';
+  PLGP.def = null;
+  switchTab(SUB_PARENT['plgpage'] || 'campus');
+}
+
+/** 插件页的事件只挂一次，按「当前是哪个插件」派发。 */
+function pluginPageWire() {
+  const box = $('plgPageBody');
+  if (!box || box.__wired) return;
+  box.__wired = true;
+  const fire = (ev) => {
+    if (CUR_PAGE !== 'plgpage') return;
+    const t = ev.target;
+    const hit = (t && t.closest) ? t.closest('[data-act]') : null;
+    if (!hit || !box.contains(hit)) return;
+    const def = PLGP.def;
+    const fn = def && def.page && def.page.on && def.page.on[hit.getAttribute('data-act')];
+    if (typeof fn !== 'function') return;
+    try { fn(hit, ev); } catch (e) { toast('这个插件出了点问题，更新一下试试', 2400); }
+    try { pluginPagePaint(); } catch (e) { /* 画坏了已经有 toast */ }
+  };
+  box.addEventListener('click', fire);
+  box.addEventListener('change', fire);
+  const back = $('plgPageBack');
+  if (back) back.addEventListener('click', closePluginPage);
+}
+
+/* ===== 外观插件（U130）=====
+ * 用户：「也可以做外观什么的插件」。插件交一段 style，直接作用在整页上 ——
+ * 换主色、改圆角、换字体都靠它。
+ * 🔴 这一段**故意不做作用域**：外观插件要的就是全局，圈进一张卡就不是换肤了。
+ *    代价是它也能把界面写花 —— 用户卸载就恢复（样式表跟着一起删）。
+ * 🔴 用 <style id="plgstyle-<id>"> 单独挂，装一次挂一个、卸一个删一个，
+ *    不跟卡片渲染混在一起（卡片重画多少次都不会重复插入）。 */
+function pluginStyleApply(wid, css) {
+  const id = 'plgstyle-' + wid;
+  let el = document.getElementById(id);
+  const text = String(css || '');
+  if (!text) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    return;
+  }
+  if (!el) {
+    el = document.createElement('style');
+    el.id = id;
+    (document.head || document.documentElement).appendChild(el);
+  }
+  if (el.textContent !== text) el.textContent = text;
+}
+
+/** 一张插件卡的 DOM —— 和四张内置卡同一套 .lifew 类，所以长得一样。 */
+function pluginCardEl(wid, def) {
+  const s = document.createElement('section');
+  s.className = 'lifew';
+  s.setAttribute('data-life', wid);
+  const stats = (() => {
+    try { return def.stats ? (def.stats() || []).slice(0, 2) : []; } catch (e) { return []; }
+  })();
+  const stateTxt = (() => {
+    try { return def.state ? String(def.state() || '') : ''; } catch (e) { return ''; }
+  })();
+  let html = '<button type="button" class="lifew-open">' +
+    '<span class="lifew-hd"><b>' + esc(def.name) + '</b>' +
+    '<span class="lifew-tag">' + esc(def.tag || '插件') + '</span></span>';
+  if (stats.length) {
+    html += '<span class="lifew-stats">' + stats.map((x) =>
+      '<span class="lifew-stat"><i>' + esc(String((x && x.k) || '')) + '</i>' +
+      '<b>' + esc(String((x && x.v == null) ? '—' : x.v)) + '</b></span>').join('') + '</span>';
+  }
+  html += '</button><div class="lifew-ft"><span class="lifew-st">' + esc(stateTxt) + '</span>';
+  // 有自己那一页的插件，按钮就写「打开」—— 点进去是它的整页，不是一句 toast。
+  if (def.action || def.page) {
+    const label = def.action ? String(def.action.label || '打开') : '打开';
+    html += '<button type="button" class="lifew-go">' + esc(label) + ' ›</button>';
+  }
+  html += '</div>';
+  s.innerHTML = html;
+  const run = () => {
+    try {
+      if (def.page) { openPluginPage(wid); return; }
+      if (def.action && typeof def.action.run === 'function') def.action.run();
+    } catch (e) { toast('这个插件出了点问题，更新一下试试', 2400); }
+  };
+  const open = s.querySelector('.lifew-open');
+  if (open) open.addEventListener('click', run);
+  const go = s.querySelector('.lifew-go');
+  if (go) go.addEventListener('click', run);
+  return s;
+}
+
+/** 插件卡的「两个数」也会变，跟着生活页一起重画（renderLifeWidgets 会调它）。 */
+function pluginPaintStats() {
+  const host = $('lifeWidgets');
+  if (!host) return;
+  Object.keys(PLG_W).forEach((wid) => {
+    const d0 = PLG_W[wid];
+    // 自己排版的卡：让插件按自己的逻辑重画一遍（内容没变它自己会跳过）。
+    if (d0 && d0.custom) {
+      if (typeof d0.paint === 'function') {
+        try { d0.paint(); } catch (e) { /* 画坏了不往上抛 */ }
+      }
+      return;
+    }
+    const el = host.querySelector('[data-life="' + wid + '"]');
+    if (!el) return;
+    let stats = [];
+    try {
+      const d = PLG_W[wid];
+      stats = d.stats ? (d.stats() || []).slice(0, 2) : [];
+    } catch (e) { stats = []; }
+    const bs = el.querySelectorAll('.lifew-stat b');
+    for (let i = 0; i < bs.length; i++) {
+      const v = stats[i] ? String(stats[i].v == null ? '—' : stats[i].v) : '';
+      if (bs[i].textContent !== v) bs[i].textContent = v;
+    }
+  });
+}
+
+/** 把「装着的插件」和「生活页上的卡」对齐：卸掉的撤卡，新装/重启的画回来。 */
+function pluginMountCards() {
+  const host = $('lifeWidgets');
+  if (!host) return;
+  const inst = pluginInstalled();
+  // ① 卸掉的：卡、LIFE_WIDGETS 里那条、登记，一起撤。
+  Object.keys(PLG_W).forEach((wid) => {
+    const pid = wid.slice(4);
+    if (inst[pid]) return;
+    const gone = PLG_W[wid];
+    if (gone && gone.timer) clearInterval(gone.timer);   // 自己排版的卡可能挂着定时重画
+    delete PLG_W[wid];
+    pluginStyleApply(wid, '');                            // 外观插件：卸了就把样式摘掉
+    const el = host.querySelector('[data-life="' + wid + '"]');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    const i = LIFE_WIDGETS.findIndex((w) => w.id === wid);
+    if (i >= 0) LIFE_WIDGETS.splice(i, 1);
+  });
+  // ② 装着的：还没挂上的，跑一遍代码把卡挂出来。
+  Object.keys(inst).forEach((pid) => {
+    const wid = 'plg:' + pid;
+    // 已经挂过：别重复挂卡，但样式还要保证在（换页、重启都可能把 <style> 弄丢）。
+    if (PLG_W[wid]) { pluginStyleApply(wid, PLG_W[wid].style); return; }
+    const code = store.get(pluginCodeKey(pid), '');
+    if (!code) return;
+    let def = null;
+    try {
+      def = pluginParse(code, { id: pid, name: pid, tag: '插件', ver: inst[pid].ver });
+    } catch (e) {
+      // 插件跑挂不该弄坏生活页：记一笔，跳过这一张。
+      appLog('插件跑不起来：' + pid + ' ' + ((e && e.message) || e));
+      return;
+    }
+    if (!def) return;
+    PLG_W[wid] = def;
+    pluginStyleApply(wid, def.style);
+    // 纯外观插件（只交 style，没有卡片也没有自己的页面）不占生活页：
+    // 它干的活是换一层样式，硬塞一张空卡进去只是占地方。卸载去插件市场。
+    if (!def.custom && !def.page && !def.stats && !def.state && !def.action) return;
+    LIFE_WIDGETS.push({
+      id: wid,
+      name: def.name,
+      tag: def.tag || '插件',
+      pre: false,
+      desc: '插件 · ' + def.name,
+      state: () => {
+        try { return def.state ? String(def.state() || '') : ''; } catch (e) { return ''; }
+      },
+      manage: () => {
+        try {
+          if (def.action && typeof def.action.run === 'function') def.action.run();
+        } catch (e) { /* 点坏了不往上抛 */ }
+      }
+    });
+    host.appendChild(def.custom ? pluginCustomEl(wid, def) : pluginCardEl(wid, def));
+  });
+}
+
+/** 装 / 更新（同一件事：装上新版本，覆盖旧的）。 */
+async function pluginInstall(p) {
+  if (!p) return false;
+  const has = pluginInstalled();
+  const old = has[p.id];
+  if (!old && Object.keys(has).length >= PLUGIN_MAX_N) {
+    toast('最多装 ' + PLUGIN_MAX_N + ' 个插件', 2400);
+    return false;
+  }
+  const got = await pluginFetchCode(p);
+  if (!got.ok) { toast('装不上：' + got.err, 2600); return false; }
+  // 先试着跑一遍再落盘 —— 跑不起来的代码不留垃圾。
+  let def = null;
+  try { def = pluginParse(got.text, { id: p.id, name: p.name, tag: p.tag, ver: p.ver }); } catch (e) { def = null; }
+  if (!def) { toast('这个插件打不开，先不装了', 2600); return false; }
+  if (!store.set(pluginCodeKey(p.id), got.text)) {
+    toast('本机存不下，先去「清除本机缓存」腾点地方', 2600);
+    return false;
+  }
+  has[p.id] = { ver: p.ver, code: p.code, size: got.text.length,
+    name: String(p.name || p.id), at: Math.floor(Date.now() / 1000) };
+  store.set(KEY.plugins, has);
+  // 覆盖安装时卡片要重画：先把旧登记撤掉，再挂新的。
+  const wid = 'plg:' + p.id;
+  if (PLG_W[wid]) {
+    delete PLG_W[wid];
+    const host0 = $('lifeWidgets');
+    const el = host0 && host0.querySelector('[data-life="' + wid + '"]');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    const i = LIFE_WIDGETS.findIndex((w) => w.id === wid);
+    if (i >= 0) LIFE_WIDGETS.splice(i, 1);
+  }
+  pluginMountCards();
+  // 新装的默认就摆到生活页上（用户是点了「下载」才装的，不该再让他去组件库点一次）。
+  // 纯外观插件没有卡片，别往组件列表里塞一个空壳。
+  const dNew = PLG_W[wid];
+  const hasCard = !!(dNew && (dNew.custom || dNew.page || dNew.stats || dNew.state || dNew.action));
+  const on = lifeOn();
+  if (hasCard && on.indexOf(wid) < 0) {
+    on.push(wid);
+    CFG.lifeWidgets = on;
+    store.set(KEY.settings, CFG);
+  }
+  renderLifeWidgets();
+  pluginPaintEntry();
+  return true;
+}
+
+/** 卸载：只从这台手机拿掉，插件作者那边什么都不会变。 */
+function pluginRemove(id) {
+  const has = pluginInstalled();
+  if (!has[id]) return;
+  delete has[id];
+  store.set(KEY.plugins, has);
+  store.del(pluginCodeKey(id));
+  const wid = 'plg:' + id;
+  const on = lifeOn();
+  const i = on.indexOf(wid);
+  if (i >= 0) {
+    on.splice(i, 1);
+    CFG.lifeWidgets = on;
+    store.set(KEY.settings, CFG);
+  }
+  pluginMountCards();
+  renderLifeWidgets();
+  pluginPaintEntry();
+}
+
+/** 卡片上「谁提交的、什么时候」那一行（U119，用户要求放在上面）。
+ *  by 是 GitHub 帐号，at 是「2026-11-28」。缺了就说实话 —— 不编一个人出来。 */
+function pluginByLine(p) {
+  const by = String(p.by || '').replace(/^@+/, '').trim();
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(String(p.at || ''));
+  const when = m ? Number(m[2]) + '月' + Number(m[3]) + '日' : '';
+  /* 2026-11-28 U120：用户看着「社区提交」问「不应该是标注我提交的吗，
+   * 然后再给我加一个头衔（作者）」。
+   *  ⇒ by 照旧是帐号；role 是头衔（作者 / 维护者 / 贡献者），清单里写。
+   *    没写 role 但 by 就是仓库主的话，也当作者 —— 老清单没这个字段时不会突然
+   *    把作者写成「贡献者」。 */
+  let role = String(p.role || '').slice(0, 6);
+  if (!role && by && by.toLowerCase() === String(UPDATE_OWNER).toLowerCase()) role = '作者';
+  const who = esc(by ? '@' + by : '社区提交');
+  return who +
+    (role ? '<span class="plg-role">' + esc(role) + '</span>' : '') +
+    (when ? '<span class="plg-at"> · ' + esc(when) + '</span>' : '');
+}
+
+/** 一张插件卡（U119：用户要「一块一块的」）。
+ *  🔴 按钮上的 data-plg / data-act 别改：列表的点击是委托在 #plgList 上按这两个
+ *     属性找的，改了就点不动（测试也按它们找）。 */
+function pluginCardHtml(p, cur, up) {
+  const acts = [];
+  if (cur && up) acts.push('<button type="button" class="wstore-btn" data-plg="' + esc(p.id) + '" data-act="up">更新</button>');
+  if (!cur) acts.push('<button type="button" class="wstore-btn" data-plg="' + esc(p.id) + '" data-act="in">下载</button>');
+  if (cur) acts.push('<button type="button" class="wstore-btn del" data-plg="' + esc(p.id) + '" data-act="rm">删除</button>');
+  const kb = p.size ? ' · ' + Math.max(1, Math.round(p.size / 1024)) + ' KB' : '';
+  return '<article class="plg-card">' +
+    '<div class="plg-hd"><b>' + esc(p.name) + '</b>' +
+    '<span class="plg-tag">' + esc(p.tag || '插件') + '</span>' +
+    (cur ? '<span class="plg-mark' + (up ? ' up' : '') + '">' + (up ? '可更新' : '已装') + '</span>' : '') +
+    '</div>' +
+    '<div class="plg-by">' + pluginByLine(p) + '</div>' +
+    (p.desc ? '<p class="plg-desc">' + esc(p.desc) + '</p>' : '') +
+    '<div class="plg-btm"><span class="plg-ver">v' + esc(p.ver) + kb + '</span>' +
+    '<span class="plg-acts">' + acts.join('') + '</span></div>' +
+    '</article>';
+}
+
+/** 插件市场的列表。装的、能升的、没装的、下架的都在这一处管理。 */
+async function pluginPaintList(force) {
+  const box = $('plgList');
+  if (!box) return;
+  pluginWireList();
+  box.innerHTML = '<div class="plg-wait">正在连 GitHub…</div>';
+  const idx = await pluginLoadIndex(force);
+  if (!box || !$('plgList')) return;           // 等着的时候页面已经被切走
+  pluginPaintEntry();
+  if (!idx) {
+    box.innerHTML = '<div class="plg-wait">' + esc(PLG.err || '连不上 GitHub') + '</div>';
+    return;
+  }
+  const has = pluginInstalled();
+  const rows = idx.plugins.map((p) => pluginCardHtml(p, has[p.id], pluginNewer(p, has[p.id])));
+  // 🔴 装着但清单里已经没有的（下架、改了 id）：也必须列出来。
+  //    不列的话用户根本删不掉它 —— 卡在生活页上，找不着任何入口。
+  Object.keys(has).forEach((pid) => {
+    if (idx.plugins.some((p) => p.id === pid)) return;
+    const cur = has[pid] || {};
+    rows.push('<article class="plg-card">' +
+      '<div class="plg-hd"><b>' + esc(cur.name || pid) + '</b>' +
+      '<span class="plg-mark off">已下架</span></div>' +
+      '<p class="plg-desc">市场里已经没有这个插件了，删掉它不影响别处。</p>' +
+      '<div class="plg-btm"><span class="plg-ver">v' + esc(cur.ver || '?') + ' · 已装</span>' +
+      '<span class="plg-acts"><button type="button" class="wstore-btn del" data-plg="' +
+      esc(pid) + '" data-act="rm">删除</button></span></div>' +
+      '</article>');
+  });
+  if (!rows.length) {
+    box.innerHTML = '<div class="plg-wait">GitHub 上还没有上架的插件</div>';
+    return;
+  }
+  box.innerHTML = rows.join('');
+}
+
+/** 市场卡片的点击（下载 / 更新 / 删除）—— 委托在 #plgList 上。
+ *  🔴 **只挂一次**：列表每次都是重画 innerHTML，委托挂在容器自己身上不会掉；
+ *     反过来，如果每次进页面都挂一遍，一次点击会装两遍（第二次还在下载中）。
+ *  🔴 删除先处理：下架的那些在清单里找不到，走不到下面那步。 */
+let PLG_WIRED = false;
+function pluginWireList() {
+  if (PLG_WIRED) return;
+  const box = $('plgList');
+  if (!box) return;
+  PLG_WIRED = true;
+  box.addEventListener('click', async (ev) => {
+    const b = ev.target && ev.target.closest ? ev.target.closest('[data-plg]') : null;
+    if (!b) return;
+    const id = b.dataset.plg;
+    const act = b.dataset.act;
+    if (act === 'rm') {
+      pluginRemove(id);
+      toast('已经从生活页删掉了', 2200);
+      pluginPaintList(false);
+      return;
+    }
+    const list = (PLG.index && PLG.index.plugins) || [];
+    const p = list.filter((x) => x.id === id)[0];
+    if (!p) return;
+    b.disabled = true;
+    b.textContent = act === 'up' ? '更新中' : '下载中';
+    const doneOne = await pluginInstall(p);
+    if (doneOne) {
+      toast('「' + p.name + '」' + (act === 'up' ? '更新好了' : '装好了，已经加到生活页'), 2400);
+    }
+    pluginPaintList(false);
+  });
+}
+
+/** 插件市场。「我的 → 插件市场」，2026-11-28 U119 起是单独一整页。
+ *  🔴 每次点进来都重拉清单（见 switchTab 里的 plugins 分支）——
+ *     不然看到的是上次那份，刚上架 / 刚更新的插件要进出两次才出现。 */
+function openPluginMarket() {
+  pluginWireList();
+  switchTab('plugins');
+}
+
+/* 别人交上来的插件怎么进市场。
+ * 🔴 App 里没有服务器，所以**只能经我手**：审核 → 我传到 GitHub → 清单加一行。
+ *    这也是「只能在 GitHub 下载」这条能站得住的原因 —— 用户发来的文件不会被
+ *    直接装进 App。 */
+/** 「我也做一个」（U119）：**直接去 GitHub 新建文件**，提交时 GitHub 自动开 PR。
+ *  用户 2026-11-28 原话：「点我也做一个之后应该直接跳转到 GitHub 交插件的位置
+ *  也就是 pr」—— 所以上一版那个「发群里 / 提 Issue」的中间弹层整块删掉了。
+ *  模板先塞进剪贴板：到 GitHub 新建文件页粘上、改几个字就能提交。 */
+const PLUGIN_NEW_URL = PROJECT_HOME_GITHUB + '/new/main/plugins';
+
+function openPluginSubmit() {
+  let ok = false;
+  if (NATIVE && window.NativeApi && typeof window.NativeApi.openUrl === 'function') {
+    try { ok = !!window.NativeApi.openUrl(PLUGIN_NEW_URL); } catch (e) { ok = false; }
+  }
+  if (ok) return;                       // 已经到 GitHub 新建文件页了
+  if (wtCopy(PLUGIN_NEW_URL)) toast('打不开浏览器，地址已复制', 3200);
+  else toast('打不开浏览器，过会儿再试', 2600);
+}
+
+/** 开机：把装着的插件挂回去（不联网），再悄悄看一眼有没有新版。
+ *  🔴 不联网那一次一定要先做：网断着的时候插件也得照样能用。 */
+function pluginBoot() {
+  try { pluginPageWire(); } catch (e) { appLog('插件页初始化失败：' + ((e && e.message) || e)); }
+  try { pluginMountCards(); } catch (e) { appLog('插件挂载失败：' + ((e && e.message) || e)); }
+  pluginPaintEntry();
+  // 悄悄查一次清单：只为了让「我的」那行能显示「N 个可更新」，失败不打扰。
+  if (NATIVE) {
+    setTimeout(() => {
+      pluginLoadIndex(true).then(() => pluginPaintEntry()).catch(() => {});
+    }, 1200);
+  }
+}
+
+/** 「+ 组件」：组件库（U117）。入口还是原来那颗按钮，点开的面板换成下载 / 删除。
+ *  🔴 用户 2026-11-28：「以后做的小组件默认不下载，这四个默认下载，然后可以删除」，
+ *     并且明确**入口不要动** —— 所以按钮位置、样子一个字没改，只换面板内容。
+ *     以前那排勾选框看不出「删掉还能装回来」，也分不清哪些是出厂就带的。 */
 function openLifeWidgetsSheet() {
   const on = lifeOn();
   $('sheetBody').innerHTML =
     '<div class="sh-title">组件</div>' +
-    '<div class="sh-sub">取消勾选即可隐藏对应卡片。</div>' +
-    '<div class="picklist">' + LIFE_WIDGETS.map((w) =>
-      '<button type="button" class="pickopt' + (on.indexOf(w.id) >= 0 ? ' on' : '') +
-      '" data-life="' + w.id + '"><span class="t">' + esc(w.name) + '</span>' +
-      '<svg class="ck" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>'
-    ).join('') + '</div>' +
+    '<div class="sh-sub">点「下载」加到生活页；删除只是从这一页拿掉，记录不会丢。</div>' +
+    // 🔴 插件（`plg:` 开头）不列在这里：它们的下载 / 更新 / 删除全在「插件市场」，
+    //    两处各有一个「删除」会让人分不清哪个是真卸载。
+    '<div class="wstore">' + LIFE_WIDGETS.filter((w) => String(w.id).indexOf('plg:') !== 0).map((w) => {
+      const has = on.indexOf(w.id) >= 0;
+      return '<div class="wstore-row">' +
+        '<span class="wstore-tx"><b>' + esc(w.name) + '</b>' +
+        '<i>' + esc(w.desc || w.tag || '') + '</i></span>' +
+        '<button type="button" class="wstore-btn' + (has ? ' del' : '') +
+        '" data-life="' + w.id + '">' + (has ? '删除' : '下载') + '</button>' +
+        '</div>';
+    }).join('') + '</div>' +
     '<div class="sheetbtns"><button class="btn primary" id="lifeDone">完成</button></div>';
   $('sheetMask').hidden = false;
-  $('sheetBody').querySelectorAll('[data-life]').forEach((b) => {
+  $('sheetBody').querySelectorAll('.wstore-btn').forEach((b) => {
     b.addEventListener('click', () => {
       const id = b.dataset.life;
+      const w = LIFE_WIDGETS.find((x) => x.id === id);
       const cur = lifeOn();
       const i = cur.indexOf(id);
-      if (i >= 0) cur.splice(i, 1); else cur.push(id);
+      const nm = w ? w.name : '组件';
+      if (i >= 0) {
+        cur.splice(i, 1);
+        toast('「' + nm + '」从生活页删掉了，记录还在，随时能下载回来', 2600);
+      } else {
+        cur.push(id);
+        toast('「' + nm + '」下载好了，已经加到生活页', 1800);
+      }
       CFG.lifeWidgets = cur;
       store.set(KEY.settings, CFG);
-      b.classList.toggle('on', i < 0);
+      // 按钮就地翻面，不整块重画 —— 重画会让手指下面的按钮跳走。
+      b.classList.toggle('del', i < 0);
+      b.textContent = i < 0 ? '删除' : '下载';
       renderLifeWidgets();
     });
   });
   const done = $('lifeDone');
   if (done) done.addEventListener('click', closeSheet);
 }
+
 if ($('lifeAdd')) $('lifeAdd').addEventListener('click', openLifeWidgetsSheet);
 if ($('lifeHuiOpen')) $('lifeHuiOpen').addEventListener('click', openLifeDetail);
 if ($('lifeDetailX')) $('lifeDetailX').addEventListener('click', closeLifeDetail);
@@ -21390,6 +22796,8 @@ async function boot() {
   // 检查更新：每次进软件自动查一次（只读公开清单，静默，失败不打扰）。
   // 放在首帧之后再发，别让一次网络往返拖住「课表」这一屏。
   if (NATIVE) setTimeout(() => { checkUpdate(true); }, 300);
+  // 插件（U118）：先把已装的挂回生活页（纯本地），再悄悄看有没有新版。
+  setTimeout(() => { pluginBoot(); }, 40);
   // 打开次数（launchN）。只做本机统计，不上报。
   CFG.launchN = (CFG.launchN || 0) + 1;
   store.set(KEY.settings, CFG);
@@ -21787,14 +23195,213 @@ function bgStart() {
   }, 2500);
 }
 
-/* ================= U95⑦ AI 助手：注册工具实现（2026-11-28）=================
+/* ============ U95⑦ / U105 AI 助手：注册工具实现（2026-11-28）============
  * 只在这里把「模型要调的工具」接到已有数据链。ai.js 负责对话和白名单，
- * 这里负责真查 / 引导，两边不互相依赖。
+ * 这里负责真查、真改课表，两边不互相依赖。
  * 🔴 隐私：工具返回给模型的文本里**只有它要的最小字段** —— 课表只发课程名、
  *    节次、教室；电费只发金额数字。账号、一卡通号、登录凭据一律不发。
+ * 🔴 U105：加课 / 改课 / 删课只写本机「自己加的课」（CFG.myCourses），
+ *    跟手动那张表单走同一个 saveMyCourses，教务系统里的数据一律不动。
  */
 if (window.AI && typeof AI.registerTools === 'function') {
-  AI.registerTools({
+  // 模型给的是中文口语，这里统一翻成课表用的 0 基数据。
+  const aiDay = (s) => {
+    const t = String(s || '').trim();
+    const i = ['一', '二', '三', '四', '五', '六', '日', '天'].findIndex((x) => t.indexOf(x) >= 0);
+    if (i >= 0) return i >= 7 ? 6 : i;            // 「周天」算周日
+    const n = Number(t);
+    return (n >= 1 && n <= 7) ? (n - 1) : -1;     // 也认「3」= 周三
+  };
+  const aiWeeks = (s) => {
+    const all = allWeeks();
+    const t = String(s || '').trim();
+    // U106：用户说「只要今天这一周」时，模型不知道第几周，会反问。
+    //      现在上下文里已经给了当前周，「这周 / 本周 / 今天」直接落到那一周。
+    if (/这周|本周|当周|这一周|这星期|本星期|今天|今日/.test(t)) return [currentWeek()];
+    if (!t || t.indexOf('全') >= 0 || t.indexOf('整') >= 0) return all.slice();
+    if (t.indexOf('单') >= 0) return all.filter((w) => w % 2 === 1);
+    if (t.indexOf('双') >= 0) return all.filter((w) => w % 2 === 0);
+    const out = new Set();
+    String(t).replace(/(\d+)\s*[-~到至]\s*(\d+)/g, (_, a, b) => {
+      for (let w = Number(a); w <= Number(b); w++) out.add(w); return '';
+    }).replace(/\d+/g, (d) => { out.add(Number(d)); return ''; });
+    const arr = Array.from(out).filter((w) => w >= 1 && w <= all.length).sort((a, b) => a - b);
+    return arr.length ? arr : all.slice();
+  };
+  const aiSlots = (day, p0, p1) => {
+    const units = Math.max(2, (curTT().unitCount) || 10);
+    const a = Math.max(1, Math.round(Number(p0) || 1));
+    const b = Math.max(a, Math.round(Number(p1) || a));
+    const out = [];
+    for (let p = a - 1; p <= b - 1 && p < units; p++) out.push({ day: day, period: p });
+    return out;
+  };
+  const aiFind = (name) => {
+    const t = String(name || '').trim();
+    if (!t) return null;
+    const list = myCourses();
+    return list.find((c) => c.name === t)
+      || list.find((c) => c.name.indexOf(t) >= 0 || t.indexOf(c.name) >= 0) || null;
+  };
+  /** 课表里出现过的所有课程名（教务的 + 自己加的），去重、保持原顺序。
+   *  U106：模型靠这份清单把「数学课」认成「线性代数(工)」。 */
+  const aiCourseNames = () => {
+    const seen = new Set(), out = [];
+    allCourses().forEach((c) => {
+      const n = String((c && c.name) || '').trim();
+      if (n && !seen.has(n)) { seen.add(n); out.push(n); }
+    });
+    return out;
+  };
+  /** 把用户说的名字对到课表里已有的全名上；对不上就原样用。
+   *  只处理「去掉括号 / 末尾的『课』后能对上」这种硬关系 —— 语义上的泛称
+   *  （「数学课」→「线性代数」）交给模型判断，代码不猜。 */
+  const aiCanon = (name) => {
+    const t = String(name || '').trim();
+    if (!t) return t;
+    const names = aiCourseNames();
+    if (names.indexOf(t) >= 0) return t;
+    const bare = (s) => String(s || '').replace(/[（(][^)）]*[)）]/g, '').replace(/课$/, '').trim();
+    const bt = bare(t);
+    if (bt.length < 2) return t;
+    const hit = names.find((n) => bare(n) === bt)
+      || names.find((n) => bare(n).indexOf(bt) >= 0)
+      || names.find((n) => bt.indexOf(bare(n)) >= 0 && bare(n).length >= 2);
+    return hit || t;
+  };
+  /** 在学校给的课里找一门（不含自己加的）。 */
+  const aiFindSchool = (name) => {
+    const t = String(name || '').trim();
+    if (!t) return null;
+    const cn = aiCanon(t);
+    const list = allCourses().filter((c) => c && c.name && !isMyCourse(c));
+    return list.find((c) => c.name === cn)
+      || list.find((c) => c.name.indexOf(cn) >= 0 || cn.indexOf(c.name) >= 0) || null;
+  };
+  const aiWeeksText = (arr) => {
+    const a = (arr || []).slice().sort((x, y) => x - y);
+    if (!a.length) return '这学期都不上';
+    if (a.length === 1) return '第 ' + a[0] + ' 周';
+    return (typeof compactWeeks === 'function' ? compactWeeks(a) : (a[0] + '–' + a[a.length - 1])) + ' 周';
+  };
+  /** 用户这句话里说的「原来那一周 / 原来那一天」。认不出返回 0 / -1。
+   *
+   *  🔴 U115：模型经常不填 from_week，而「界面停在第几周」也不等于「他说的是哪一周」——
+   *     他可能已经翻到第 13 周，嘴里在说「12 周周五的改到 13 周周六」。上一版直接拿
+   *     目标周当源周去跳过，结果动的是 13 周周五那节课（用户：「你改的是 13 周周五的呀」）。
+   *     现在只认他自己那句话：改动词**前面**那半句里的「12 周」「明天」「这个星期」。 */
+  const aiSaidHead = (said) => {
+    const s = String(said || '');
+    if (!s) return '';
+    const cut = s.search(/改到|挪到|调到|放到|移到|换到|转到|调整到|改去|挪去/);
+    return cut > 0 ? s.slice(0, cut) : s;
+  };
+  const aiSrcWeek = (said) => {
+    const head = aiSaidHead(said);
+    if (!head) return 0;
+    const n0 = allWeeks().length;
+    const m = /第?\s*(\d{1,2})\s*周/.exec(head);
+    if (m) {
+      const n = Number(m[1]);
+      if (n >= 1 && n <= n0) return n;
+    }
+    // 「明天 / 昨天 / 后天」：转发的通知里常这么写；按日期算比按界面周次准。
+    const rel = /大后天/.test(head) ? 3 : /后天/.test(head) ? 2
+      : /明天|明日/.test(head) ? 1 : /昨天|昨日/.test(head) ? -1 : /前天/.test(head) ? -2 : 0;
+    if (rel) {
+      try {
+        const w = weekOf(addDays(new Date(), rel));
+        if (w >= 1 && w <= n0) return w;
+      } catch (e) {}
+    }
+    if (/这(个)?(星期|周)|本(星期|周)|当(个)?(星期|周)/.test(head)) return currentWeek();
+    return 0;
+  };
+  const aiSrcDay = (said) => {
+    const head = aiSaidHead(said);
+    if (!head) return -1;
+    const m = /(?:星期|周|礼拜)([一二三四五六日天])/.exec(head);
+    if (!m) return -1;
+    const c = m[1] === '天' ? '日' : m[1];
+    return '一二三四五六日'.indexOf(c);
+  };
+  /** 用户这句话里「要改到哪一天」。认不出返回 -1。
+   *
+   *  🔴 U116：「13 周周六上午的 Linux 改回周五」——模型经常只传个课程名，
+   *     星期不传。以前代码只能拿这门课原来的位置，于是「改回周五」跟「什么
+   *     都不改」算出来一模一样，回一句「改好了」课表却没动。
+   *     这里只看**改动词之后**那半句（「改回周五」），不会把前半句的「周六」当目标。 */
+  const aiDstDay = (said) => {
+    const s = String(said || '');
+    if (!s) return -1;
+    const cut = s.search(/改回|改到|改去|挪回|挪到|挪去|调回|调到|放到|移到|移到|换到|换回|转回|转到|调整到/);
+    const tail = cut >= 0 ? s.slice(cut) : s;
+    const ms = tail.match(/(?:星期|周|礼拜)[一二三四五六日天]/g) || [];
+    if (!ms.length) return -1;
+    const c = ms[ms.length - 1].slice(-1);
+    return c === '天' ? 6 : '一二三四五六日'.indexOf(c);
+  };
+  /** 能直接打开的页面。长的放前面 —— 「校园服务」不能被「服务」抢走。 */
+  const AI_PAGES = [
+    { k: ['校园服务'], tab: 'services', name: '校园服务' },
+    { k: ['账号管理', '账号', '绑定'], tab: 'accounts', name: '账号管理' },
+    { k: ['空教室', '教室'], tab: 'rooms', name: '空教室' },
+    { k: ['校历', '日历'], tab: 'calendar', name: '校历' },
+    { k: ['考试', '作业', '学习通', '学习', '成绩'], tab: 'exams', name: '学习' },
+    { k: ['课表', '课程'], tab: 'schedule', name: '课表' },
+    { k: ['生活', '功能'], tab: 'campus', name: '生活' },
+    { k: ['我的', '设置', '关于'], tab: 'me', name: '我的' }
+  ];
+  /** 用户点名的快递 App → 直接对应那条入口（U114）。
+   *  「跳到淘宝身份码」是要**一步跳过去**，不是先弹个层再让他自己点一次。
+   *  只认他明确说的 App；说不出哪个 App 返回 null，由调用方弹层让他选。 */
+  const aiJumpApp = (s) => {
+    const t = String(s || '');
+    const got = (k) => JUMP_ENTRIES.find((e) => e.key === k) || null;
+    const pendingList = /待取|快递列表|取件列表|我的快递/.test(t);
+    if (/菜鸟|裹裹/.test(t)) return got('cainiao');
+    if (/淘宝|天猫/.test(t)) return got(pendingList ? 'express' : 'taobao');
+    if (/拼多多/.test(t)) return got(pendingList ? 'pdd_pending' : 'pdd');
+    if (/抖音/.test(t)) return got('douyin');
+    if (/京东/.test(t)) return got('jd');
+    if (/身份码/.test(t)) return got('taobao');   // 没点名哪个 App，默认淘宝（用户最常用）
+    return null;
+  };
+  const aiCourseText = (c) => {
+    const where = slotsToRows(c.slots || []).map((r) =>
+      '周' + DAY_CN[r.day] + '第' + (r.p0 + 1) + (r.p1 > r.p0 ? '-' + (r.p1 + 1) : '') + '节').join('、');
+    return c.name + '（' + where + (c.room ? ' · ' + c.room : '') + '）';
+  };
+
+  /* ---------------- U116：撤销 ----------------
+   * 用户「把你做的所有操作都撤销」—— 以前根本没有这一步。模型只能再去调一次
+   * update_course，参数跟上一句一模一样，于是它回「改好了：Linux操作系统
+   * （周六第1-2节）」，课表一个字没动，用户看到的就是「改不了」。
+   * 撤销必须是真的退回去：每次改课表前，先把「本机调整 / 自己加的课 / 隐藏」
+   * 三样东西整份存一份快照，撤销就是把快照放回去。
+   * 🔴 只存本机这三样，教务数据一个字都不在里头，撤销不会碰到学校那边的课。 */
+  const AI_HIST = [];                       // 最近几次改动之前的样子（最多 12 份）
+  const aiClone = (v) => {
+    try { return v == null ? v : JSON.parse(JSON.stringify(v)); } catch (e) { return v; }
+  };
+  function aiSnapPush(s, what) {
+    if (!s) return;
+    AI_HIST.push({ what: what || '改了课表',
+      edits: s.edits || {}, my: s.my || [], hidden: s.hidden || [] });
+    if (AI_HIST.length > 12) AI_HIST.shift();
+  }
+  function aiSnapRestore(s) {
+    CFG.courseEdits = aiClone(s.edits || {});
+    CFG.myCourses = aiClone(s.my || []);
+    CFG.hidden = aiClone(s.hidden || []);
+    store.set(KEY.settings, CFG);
+    try { renderSchedule(); renderMe(); } catch (e) {}
+  }
+  /** 这一周这一节上现在是不是这门课（撤销后复核用，别嘴上说退了）。 */
+  const aiHasCell = (wk, day, p, key) =>
+    !!((occupancy(wk)[day + ':' + p] || []).some((c) => courseKey(c) === key));
+
+  const AI_TOOLS = {
     get_schedule: (args) => {
       try {
         const week = currentWeek();
@@ -21815,32 +23422,686 @@ if (window.AI && typeof AI.registerTools === 'function') {
           });
           rows.push('第' + (p + 1) + '节 ' + parts.join('、'));
         }
-        return { text: rows.length ? rows.join('；') : ('周' + DAY_CN[di] + '没有课。') };
+        const head = '第 ' + week + ' 周周' + DAY_CN[di] + '：';
+        return { text: head + (rows.length ? rows.join('；') : '没有课。') };
       } catch (e) { return { text: '课表还没同步，先去同步教务处数据。' }; }
     },
 
     get_electricity: async () => {
       try {
-        const acc = (store.get(KEY.jfAcc) || '').trim();
-        if (!acc) return { text: '还没填一卡通号，先去智慧江财页填一下。' };
-        const r = await api('/api/jf/query', { acc: acc, roomId: (jfRoom() || {}).id || 0 });
-        if (!r || !r.ok) return { text: '电费没查到，去智慧江财页看看。' };
+        // 🔴 U106：先分清到底缺哪一样 —— 一卡通号、还是「选宿舍」。
+        //    原来一律写成「还没填一卡通号」，用户明明填过号（只是没选宿舍），
+        //    看到这句只会更糊涂，还以为软件把他填的东西弄丢了。
+        const acc = jfAcc();
+        const room = jfRoom();
+        const cached = jfData() || {};
+        const last = (cached.elec && cached.elec.bal != null) ? cached.elec : null;
+        const lastTxt = last
+          ? ('上次查到宿舍还剩 ' + last.bal + (last.unit ? ' ' + last.unit : '') + '。')
+          : '';
+        if (!acc) {
+          return { text: lastTxt
+            ? ('这个 App 里还没填一卡通号，刷不了最新余额。' + lastTxt)
+            : '还没填一卡通号，去「生活 → 智慧江财」填一下，我就能查电费。' };
+        }
+        if (!room || !room.id) {
+          return { text: lastTxt
+            ? ('还没选宿舍，只能看上次的读数。' + lastTxt +
+               '去「生活 → 智慧江财」点「选宿舍」选一次，就能查最新的。')
+            : '还没选宿舍。去「生活 → 智慧江财」点「选宿舍」选一次你住的房间，我才能查到电费。' };
+        }
+        const r = await api('/api/jf/query', { acc: acc, roomId: room.id });
+        if (!r) return { text: lastTxt || '电费暂时查不到，稍后再试。' };
+        if (r.ok === false) return { text: r.error || '电费暂时查不到，稍后再试。' };
+        // 🔴 U105：实际返回是 { ok, elec:{bal,unit}, errs:[] }，**没有 data 这层**。
         // 只发金额数字，不发账号 / 房间号。
-        const bal = (r.data && (r.data.balance != null ? r.data.balance : r.data.kwh));
-        return { text: (bal != null ? ('宿舍还剩 ' + bal + ' 度电。') : '电费查到了，具体数值去智慧江财页看。') };
+        const elec = r.elec || null;
+        const errs = (Array.isArray(r.errs) ? r.errs : []).filter(Boolean);
+        const elecTxt = (elec && elec.bal != null)
+          ? ('宿舍还剩 ' + elec.bal + ' ' + (elec.unit || '度') + '电')
+          : (errs.length ? ('电费没查到：' + errs.join('；')) : '电费暂时查不到');
+        // 🔴 U113：网费学校只给充值记录、没有余额接口，按 12.5 元/月推到期日。
+        //    以前这里只查电费，用户一问网费就只能回「查不了」—— 功能本来就有。
+        let netTxt = '';
+        try {
+          const rr = await api('/api/jf/records', { acc: acc, roomId: room.id });
+          if (rr && rr.ok) {
+            const net = jfNetExpire(rr.rows || []);
+            const day = (t) => String(t || '').slice(0, 10);
+            if (net && net.expire) {
+              netTxt = '网费预计用到 ' + net.expire +
+                (net.last ? ('（' + day(net.last.time) + ' 充了 ' + net.last.amount + ' 元）') : '');
+            } else if (net && net.last) {
+              netTxt = '网费上次是 ' + day(net.last.time) + ' 充了 ' + net.last.amount + ' 元';
+            } else {
+              netTxt = '网费还没有充值记录，推不出什么时候到期';
+            }
+          }
+        } catch (e2) { /* 记录拉不到不影响电费余额 */ }
+        return { text: elecTxt + '；' + (netTxt || '网费暂时查不到') + '。' };
       } catch (e) { return { text: '电费暂时查不到，稍后再试。' }; }
     },
 
-    // 🔴 开水 / 签到是高危操作：现有实现都是「选设备 / 选课 + 长按确认」的完整流程，
-    //    AI 这边不偷偷执行，只把人引导到对应页面自己点 —— 这也符合「高危要本人同意」。
-    open_water: () => ({
-      text: '开热水要连你宿舍的水表，请在「生活 → 住理生活」里点开热水按钮操作，我不能直接替你开。'
-    }),
+    add_course: (args) => {
+      try {
+        args = args || {};
+        const said = String(args.name || '').trim();
+        if (!said) return { text: '课程名没说清楚，请告诉我加什么课。' };
+        // U106：模型一般已把「数学课」翻成现有课程的全名；万一它照抄了泛称，
+        //       这里再对一次已有课程名，别让课表上多出一门同课的怪名字。
+        const name = aiCanon(said);
+        const day = aiDay(args.day);
+        if (day < 0) return { text: '星期没认出来，请说「周三」这样。' };
+        const p0 = Number(args.start_period);
+        if (!(p0 >= 1)) return { text: '第几节没说清楚，请说「第 3 节」。' };
+        const slots = aiSlots(day, p0, args.end_period || p0);
+        if (!slots.length) return { text: '节次超出课表范围了，请换个节次。' };
+        const weeks = aiWeeks(args.weeks);
+        const item = {
+          code: 'my:' + Date.now().toString(36),
+          name: name,
+          room: String(args.room || '').trim(),
+          teacher: String(args.teacher || '').trim(),
+          weeks: weeks,
+          slots: slots
+        };
+        const list = myCourses().slice();
+        list.push(item);
+        saveMyCourses(list);
+        try { if (weeks.indexOf(shownWeek()) < 0) gotoWeek(weeks[0]); } catch (e2) {}
+        remindPush(true);
+        return { text: '已加到课表：' + aiCourseText(item) + '，第 ' + weeks[0] +
+          (weeks.length > 1 ? '–' + weeks[weeks.length - 1] : '') + ' 周。' +
+          (name !== said ? ('（课表里对应的课是「' + name + '」）') : '') };
+      } catch (e) { return { text: '课表没能改，请再说得具体一点。' }; }
+    },
+
+    update_course: (args) => {
+      try {
+        args = args || {};
+        const want = String(args.name || '').trim();
+        if (!want) return { text: '要改哪门课？' };
+        // 🔴 U116：「13 周周六上午的 Linux 改回周五」——模型常常只传课程名，星期不填。
+        //    不填时就用他这句话里「改回 / 改到」后面那天，否则算出来的位置跟原来
+        //    一模一样，就成了「什么都不改还回一句改好了」。
+        if (!args.day && !args.reset) {
+          const dd = aiDstDay(args.said);
+          if (dd >= 0) args.day = DAY_CN[dd];
+        }
+        // 🔴 U116：只给了个课程名、什么新位置都没有 —— 改了也是原地写回同一条，
+        //    界面却会说「改好了」。这种情况直接问清楚，别假装改过。
+        if (!args.day && !args.start_period && !args.end_period && !args.weeks
+          && !args.room && !args.teacher && !args.new_name && !args.reset && !args.apply_all) {
+          return { text: '没改上：没说改成什么，是改到哪一天第几节，还是改教室？' };
+        }
+        const mine = aiFind(want) || aiFind(aiCanon(want));
+        // 🔴 U116：aiFind 把「单次调课补的那一条」也算成自己加的课（名字一样）。
+        //    「把周六那节改回周五」时先撞上那条补课记录，改来改去还是同一天同一节，
+        //    界面回「改好了：周六第1-2节」，课表一动不动 —— 用户说的「改不了」。
+        //    要挪时间 / 周次就不走这条路，交给下面学校课的「只改这一次」分支。
+        const mineIsMv = !!(mine && /^my:mv:/.test(String(mine.code || '')));
+        const asksMove = !!(args.day || args.start_period || args.end_period
+          || args.weeks || args.from_week || args.apply_all);
+        if (mine && !(mineIsMv && asksMove)) {
+          const item = {
+            code: mine.code, name: mine.name, room: mine.room || '', teacher: mine.teacher || '',
+            weeks: (mine.weeks || []).slice(), slots: (mine.slots || []).slice()
+          };
+          if (args.new_name) item.name = String(args.new_name).trim() || item.name;
+          if (args.room != null) item.room = String(args.room).trim();
+          if (args.teacher != null) item.teacher = String(args.teacher).trim();
+          if (args.weeks) item.weeks = aiWeeks(args.weeks);
+          if (args.day || args.start_period || args.end_period) {
+            const day = args.day ? aiDay(args.day) : null;
+            if (args.day && day < 0) return { text: '星期没认出来，说「周三」这样。' };
+            const base = slotsToRows(item.slots)[0] || { day: 0, p0: 0, p1: 0 };
+            const d = (day != null && day >= 0) ? day : base.day;
+            const a = Number(args.start_period) || (base.p0 + 1);
+            const b = Number(args.end_period) || (base.p1 + 1);
+            item.slots = aiSlots(d, a, b);
+          }
+          const list = myCourses().slice();
+          const i = list.findIndex((c) => c.code === mine.code);
+          if (i < 0) return { text: '没找到这门课。' };
+          // 🔴 U116：一个字都没变就别回「改好了」。以前模型只传个课程名，
+          //    这里照样写回同一条记录，界面说改好了，课表跟没动一样。
+          const sig = (x) => JSON.stringify([x.name, x.room, x.teacher,
+            (x.weeks || []).slice().sort((a, b) => a - b), x.slots || []]);
+          if (sig(item) === sig(mine)) {
+            return { text: '没改上：没听出要改成什么，说的是改到哪一天、第几节，还是改教室？' };
+          }
+          list[i] = item;
+          saveMyCourses(list);
+          // 改完直接跳到那一周，让用户一眼看见结果（以前停在原周，容易以为没改）。
+          try {
+            const w0 = (item.weeks || []).slice().sort((x, y) => x - y)[0];
+            if (w0) gotoWeek(w0);
+          } catch (e3) {}
+          return { text: '改好了：' + aiCourseText(item) + '。' };
+        }
+        // 🔴 U107：学校给的课也能改 —— 只改这台手机上怎么显示，学校数据一个字不动。
+        const sch = aiFindSchool(want);
+        if (!sch) return { text: '课表里没有「' + want + '」这门课。' };
+        // 🔴 U109：键一律走 courseKey（没有课程号时用「课名+老师」），
+        //    否则个别行会写到空键上，静默失败却回「改好了」。
+        const key = courseKey(sch);
+        if (args.reset) {
+          const wrote = saveCourseEdit(key, null);
+          // 「撤销」要把单次调课补的那条一起撤掉，否则会留下一条孤儿课。
+          const before = myCourses();
+          const keep = before.filter((c) => String(c.code || '').indexOf('my:mv:' + key + ':') !== 0);
+          if (keep.length !== before.length) saveMyCourses(keep);
+          const hid0 = hiddenSet();
+          if (hid0.has(key)) {
+            hid0.delete(key);
+            CFG.hidden = Array.from(hid0);
+            store.set(KEY.settings, CFG);
+            renderSchedule(); renderMe();
+          }
+          return { text: wrote ? (sch.name + ' 恢复成学校原本的样子了。')
+            : '这门课本来就没在本机改过，现在就是学校的样子。' };
+        }
+        // 改这门课等于要看见它：以前被藏起来的，顺手放开。
+        const hid1 = hiddenSet();
+        if (hid1.has(key)) {
+          hid1.delete(key);
+          CFG.hidden = Array.from(hid1);
+          store.set(KEY.settings, CFG);
+        }
+        const e0 = courseEdit(key) || {};
+        const base = {
+          slots: (Array.isArray(e0.slots) ? e0.slots : (sch.slots || [])).slice(),
+          weeks: (Array.isArray(e0.weeks) ? e0.weeks : (sch.weeks || [])).slice(),
+          room: (e0.room != null && e0.room !== '') ? e0.room : (sch.room || '')
+        };
+        if (args.weeks) base.weeks = aiWeeks(args.weeks);
+        if (args.room != null) base.room = String(args.room).trim();
+        if (args.day || args.start_period || args.end_period) {
+          const day = args.day ? aiDay(args.day) : null;
+          if (args.day && day < 0) return { text: '星期没认出来，说「周三」这样。' };
+          const row = slotsToRows(base.slots)[0] || { day: 0, p0: 0, p1: 0 };
+          const d = (day != null && day >= 0) ? day : row.day;
+          const a = Number(args.start_period) || (row.p0 + 1);
+          const b = Number(args.end_period) || (row.p1 + 1);
+          base.slots = aiSlots(d, a, b);
+        }
+        // 🔴 U110：「这周五的课挪到周六」= 只调这一次，不是整门课搬家。
+        //    以前直接改整门课的周次，结果这门课在别的周凭空消失了。
+        //    现在：原课在这一周跳过（skipWeeks），再补一条只上这一周的同名课。
+        const slotText = (sl) => slotsToRows(sl).map((r) =>
+          '周' + DAY_CN[r.day] + '第' + (r.p0 + 1) + (r.p1 > r.p0 ? '-' + (r.p1 + 1) : '') + '节').join('、');
+        // 🔴 U112：默认只调「这一次」。
+        //    以前这里要求模型必须传 weeks 才算单次，可老师通知那种话它通常只传
+        //    星期和节次、不传周次 —— 于是整门课被搬到新时间，每一周都变了样
+        //    （用户：「每次都把每一周的课都删了」）。
+        //    现在反过来：只有明确说「以后每周都改」才整门课换，其余一律只改这一周。
+        const wantsAll = args.apply_all === true || String(args.apply_all) === 'true';
+        const hasPos = !!(args.day || args.start_period || args.end_period);
+        const moveWeeks = (args.weeks ? aiWeeks(args.weeks) : [shownWeek()])
+          .filter((w) => w > 0 && allWeeks().indexOf(w) >= 0);
+        const onlyOnce = hasPos && !wantsAll && moveWeeks.length > 0
+          && moveWeeks.length < allWeeks().length;
+        if (onlyOnce) {
+          const cur = courseEdit(key) || {};
+          // 🔴 U113：源周和目标周必须分开算。
+          //    用户「把 12 周第 5 节调到 13 周星期六」= 12 周那节不上、13 周补一节。
+          //    以前只拿目标周去跳过，结果 12 周那节还留着，倒是把 13 周原本的课
+          //    挪到了周六 —— 就是他看到的「把 13 周星期五调到 13 周星期六」。
+          // 🔴 U115：from_week 是模型的可选字段，它经常不填。没填时以前退回「目标周」，
+          //    于是又变成动目标周那节（用户第二次：「你改的是 13 周周五的呀」）。
+          //    现在改成从他的原话里认：认不出才用界面上正在看的这一周。
+          const fromWeeks = args.from_week
+            ? aiWeeks(String(args.from_week)).filter((w) => w > 0 && allWeeks().indexOf(w) >= 0)
+            : [];
+          const guessed = fromWeeks.length ? 0 : aiSrcWeek(args.said);
+          const srcWeeks = fromWeeks.length ? fromWeeks
+            : (guessed > 0 ? [guessed] : [shownWeek()]);
+          const dstW0 = moveWeeks[0];
+          // 🔴 U116：「13 周周六上午的 Linux 改回周五」—— 目标位置就是学校原本的
+          //    那一天那几节，意思是**把这一周的单次调课撤掉**。
+          //    以前这种话还会再补一条同名课，而原来那节的 skipCells 还挂着，
+          //    结果要么两节叠在一起、要么一节都不显示，用户只能说「改不了」。
+          //    这里直接清掉这一周的跳过和补课记录，让它照学校原本的排法出现。
+          const rowT0 = slotsToRows(base.slots)[0];
+          const homeRows = slotsToRows(sch.slots || []);
+          const toHome = !!(rowT0 && args.day && homeRows.some((r) =>
+            r.day === rowT0.day && r.p0 === rowT0.p0 && r.p1 === rowT0.p1));
+          if (toHome) {
+            const wks0 = srcWeeks.concat(moveWeeks).filter((w, i, a) => a.indexOf(w) === i);
+            const cur0 = courseEdit(key) || {};
+            const cells0 = (Array.isArray(cur0.skipCells) ? cur0.skipCells : [])
+              .filter((x) => !(x && wks0.indexOf(x.w) >= 0));
+            const skip0 = (Array.isArray(cur0.skipWeeks) ? cur0.skipWeeks : [])
+              .filter((w) => wks0.indexOf(w) < 0);
+            // 补课条目一起收掉，否则会留下一条停在周六的孤儿课。
+            // 🔴 这门课最多只有一条补课（每次调课都会把旧的那条清掉重建），
+            //    既然要回到原来的位置，那条就没有存在的意义。
+            const before0 = myCourses();
+            const keep0 = before0.filter((c) =>
+              String(c.code || '').indexOf('my:mv:' + key + ':') !== 0);
+            if (keep0.length !== before0.length) saveMyCourses(keep0);
+            const rest0 = Object.keys(cur0).filter((k) => k !== 'skipWeeks' && k !== 'skipCells');
+            if (!cells0.length && !skip0.length && !rest0.length) {
+              saveCourseEdit(key, null);            // 本来就是学校原样，别留个空记录
+            } else if (!saveCourseEdit(key, { skipWeeks: skip0, skipCells: cells0 })) {
+              return { text: '这次没改上，先去「我的 → 账号」同步一次课表再试。' };
+            }
+            try { gotoWeek(wks0[0]); } catch (e3) {}
+            if (!aiHasCell(wks0[0], rowT0.day, rowT0.p0, key)) {
+              return { text: '没改上：课表还是原来的样子，再说一次试试。' };
+            }
+            return { text: '第 ' + wks0.join('、') + ' 周的' + sch.name + ' 回到' +
+              slotText(base.slots) + '了，跟学校原本的一样。' };
+          }
+          // 目标周必须照常上课：以前误写在它上面的「整周跳过」要摘掉，否则 13 周
+          // 周五那节课永远回不来。
+          let skip = (Array.isArray(cur.skipWeeks) ? cur.skipWeeks : [])
+            .filter((w) => srcWeeks.indexOf(w) < 0 && w !== dstW0);
+          // 只跳「源周 + 他说的那一天」那几节（没说是哪一天就跳这门课在源周的所有节）。
+          //   用 skipWeeks 会把这门课在源周别的天一起抹掉，所以这里精确到节。
+          let srcDay = aiSrcDay(args.said);
+          if (srcDay < 0) {
+            // 他没说是哪天（「明天的课取消，调整到下周六」）：拿节次去对原课的段 ——
+            // 目标 1-2 节，原课周五也是 1-2 节，那被挪的就是周五这段，不是周三那段。
+            const rowT = slotsToRows(base.slots)[0];
+            if (rowT) {
+              const hitRow = slotsToRows(sch.slots || [])
+                .find((r) => r.p0 === rowT.p0 && r.p1 === rowT.p1);
+              if (hitRow) srcDay = hitRow.day;
+            }
+          }
+          const cells = (Array.isArray(cur.skipCells) ? cur.skipCells : []).slice();
+          const skipSlots = (sch.slots || []).filter((s) => srcDay < 0 || s.day === srcDay);
+          srcWeeks.forEach((w) => {
+            skipSlots.forEach((s) => {
+              if (!cells.some((x) => x && x.w === w && x.d === s.day && x.p === s.period)) {
+                cells.push({ w: w, d: s.day, p: s.period });
+              }
+            });
+          });
+          if (!saveCourseEdit(key, { skipWeeks: skip, skipCells: cells })) {
+            return { text: '这次没改上，先去「我的 → 账号」同步一次课表再试。' };
+          }
+          // 这门课以前留下的补课条目全清掉再重建，免得同一门课在 12、13 周各挂一条。
+          const mvCode = 'my:mv:' + key + ':' + moveWeeks.join(',');
+          const list = myCourses().filter((c) =>
+            String(c.code || '').indexOf('my:mv:' + key + ':') !== 0);
+          list.push({
+            code: mvCode, name: sch.name, room: base.room, teacher: sch.teacher || '',
+            weeks: moveWeeks.slice(), slots: base.slots.slice()
+          });
+          saveMyCourses(list);
+          const wk1 = Math.min.apply(null, moveWeeks);
+          try { gotoWeek(wk1); } catch (e3) {}
+          const row1 = slotsToRows(base.slots)[0];
+          const ok1 = !!(row1 && (occupancy(wk1)[row1.day + ':' + row1.p0] || [])
+            .some((c) => c.code === mvCode));
+          // 源周那几节真没了，才算这一次真的挪过去了。
+          const gone = srcWeeks.every((w) => {
+            const occ = occupancy(w);
+            return skipSlots.every((s) => !(occ[s.day + ':' + s.period] || [])
+              .some((c) => courseKey(c) === key));
+          });
+          if (!ok1 || !gone) return { text: '没改上：课表还是原来的样子，再说一次试试。' };
+          return { text: '第 ' + srcWeeks.join('、') + ' 周' +
+            (srcDay >= 0 ? '周' + DAY_CN[srcDay] : '') + '那节不上了，补到第 ' +
+            moveWeeks.join('、') + ' 周' + slotText(base.slots) +
+            (srcWeeks.indexOf(dstW0) < 0 ? '；第 ' + dstW0 + ' 周原本的课没动' : '') + '。' };
+        }
+        if (!saveCourseEdit(key, base)) {
+          return { text: '这次没改上，先去「我的 → 账号」同步一次课表再试。' };
+        }
+        // 改完把课表跳到受影响的那一周，并复核一遍 —— 说「改好了」必须有据。
+        const wk = (base.weeks && base.weeks.length) ? Math.min.apply(null, base.weeks) : shownWeek();
+        try { gotoWeek(wk); } catch (e3) {}
+        const row0 = slotsToRows(base.slots)[0];
+        const landed = !!(row0 && Array.isArray(base.weeks) && base.weeks.indexOf(wk) >= 0
+          && (occupancy(wk)[row0.day + ':' + row0.p0] || []).some((c) => courseKey(c) === key));
+        if (row0 && !landed) return { text: '没改上：课表还是原来的样子，再说一次试试。' };
+        return { text: '改好了：' + aiCourseText({ name: sch.name, room: base.room, slots: base.slots }) +
+          '，' + aiWeeksText(base.weeks) + '。只改了这台手机上的显示。' };
+      } catch (e) { return { text: '课表没能改，说具体一点再试。' }; }
+    },
+
+    // 🔴 U114：「把这个星期的星期五调到下个星期六」—— 他说的是那一天**所有的课**。
+    //    以前只能一门一门改，模型通常只挑一门（Linux 操作系统 1-2 节）挪走，
+    //    用户回头看课表，周五另两门还好好在那儿，就觉得「根本没认周」。
+    //    现在按天整体挪：源周那天的每门课、每一节，都在源周跳过，
+    //    目标周同一节次补一条同名课。只跳那几节（skipCells），
+    //    同一门课在这周别的天照样上。
+    move_day: (args) => {
+      try {
+        args = args || {};
+        // 看的是以前的学期：这张表是只读的（自己加的课也不在这一页显示），别改。
+        if (TT) return { text: '现在看的是以前的学期，先切回本学期再挪课。' };
+        const dFrom = aiDay(args.from_day != null && args.from_day !== '' ? args.from_day : args.day);
+        if (dFrom < 0) return { text: '原来那天是星期几？说「周五」这样。' };
+        const dTo = (args.to_day != null && args.to_day !== '') ? aiDay(args.to_day) : dFrom;
+        if (dTo < 0) return { text: '要挪到星期几？说「周六」这样。' };
+        const wks = allWeeks();
+        const pick = (v, dft) => {
+          const a = v ? aiWeeks(String(v)) : [];
+          const w = a.length ? a[0] : 0;
+          return (w > 0 && wks.indexOf(w) >= 0) ? w : dft;
+        };
+        const src = pick(args.from_week, shownWeek());
+        const dst = pick(args.weeks, src);
+        if (src === dst && dTo === dFrom) return { text: '还是原来那一天，课表没动。' };
+        // 这一周这一天都有哪些课（同一门课占好几节，只算一次）
+        const occ = occupancy(src);
+        const seen = {};
+        const moving = [];
+        for (let p = 0; p < (curTT().unitCount || 10); p++) {
+          const here = occ[dFrom + ':' + p] || [];
+          here.forEach((c) => {
+            const k = courseKey(c);
+            if (!k || seen[k]) return;
+            seen[k] = 1;
+            moving.push(c);
+          });
+        }
+        if (!moving.length) {
+          return { text: '第 ' + src + ' 周周' + DAY_CN[dFrom] + '本来就没课，不用挪。' };
+        }
+        // 目标那天本来就排了课：照挪，但要说一句 —— 两边的课会排在同一格里。
+        const busyDst = Object.keys(occupancy(dst)).some((k) => k.indexOf(dTo + ':') === 0);
+        let list = myCourses().slice();
+        const parts = [];
+        const made = [];
+        moving.forEach((c) => {
+          const key = courseKey(c);
+          if (!key) return;
+          const srcSlots = (c.slots || []).filter((s) => s.day === dFrom);
+          if (!srcSlots.length) return;
+          const here = srcSlots.map((s) => ({ day: dTo, period: s.period }));
+          // ① 源周这几节跳过。用 skipCells 精确到节，同一门课在这周别的天不动。
+          const cur = courseEdit(key) || {};
+          const cells = (Array.isArray(cur.skipCells) ? cur.skipCells : []).slice();
+          srcSlots.forEach((s) => {
+            if (!cells.some((x) => x && x.w === src && x.d === s.day && x.p === s.period)) {
+              cells.push({ w: src, d: s.day, p: s.period });
+            }
+          });
+          saveCourseEdit(key, { skipCells: cells });
+          // ② 目标周补一条同名课。自己加的课本身以 my: 开头，加 m: 前缀免得套娃。
+          const mvKey = isMyCourse({ code: key }) ? ('m:' + key) : key;
+          const mvCode = 'my:mv:' + mvKey + ':' + dst;
+          list = list.filter((x) => x.code !== mvCode);
+          list.push({
+            code: mvCode, name: c.name, room: c.room || '', teacher: c.teacher || '',
+            weeks: [dst], slots: here
+          });
+          made.push({ code: mvCode, slots: here });
+          const row = slotsToRows(here)[0];
+          parts.push(c.name + ' ' + (row
+            ? ('第' + (row.p0 + 1) + (row.p1 > row.p0 ? '-' + (row.p1 + 1) : '') + ' 节') : ''));
+        });
+        saveMyCourses(list);
+        try { gotoWeek(dst); } catch (e3) {}
+        // 复核：目标周那几格上真的有补的这条，别嘴上说挪了。
+        const occ2 = occupancy(dst);
+        const landed = made.length > 0 && made.every((m) => m.slots.some((s) =>
+          (occ2[s.day + ':' + s.period] || []).some((x) => x.code === m.code)));
+        if (!landed) return { text: '没挪上：课表还是原来的样子，再说一次试试。' };
+        return { text: '第 ' + src + ' 周周' + DAY_CN[dFrom] + '的 ' + moving.length + ' 门课都挪到第 ' +
+          dst + ' 周周' + DAY_CN[dTo] + '了：' + parts.join('、') + '。' +
+          (src === dst ? '' : ('第 ' + src + ' 周周' + DAY_CN[dFrom] + '就空了。')) +
+          (busyDst ? '（那天本来有课，两边的课会排在一块）' : '') };
+      } catch (e) { return { text: '课表没能改，说具体一点再试。' }; }
+    },
+
+    delete_course: (args) => {
+      try {
+        const want = String((args && args.name) || '').trim();
+        if (!want) return { text: '要删哪门课？' };
+        const mine = aiFind(want) || aiFind(aiCanon(want));
+        if (mine) {
+          saveMyCourses(myCourses().filter((c) => c.code !== mine.code));
+          return { text: '从课表删掉了：' + mine.name + '。' };
+        }
+        const sch = aiFindSchool(want);
+        if (!sch) return { text: '课表里没有「' + want + '」这门课。' };
+        // 学校的课不能真删（下次同步又回来），只在这台手机上不显示。
+        // U109：键走 courseKey，课程号为空的行也能记住。
+        const key = courseKey(sch);
+        const hid = hiddenSet();
+        // 单次调课补的那条也跟着这条学校课走，别留下孤儿。
+        const before = myCourses();
+        const keep = before.filter((c) => String(c.code || '').indexOf('my:mv:' + key + ':') !== 0);
+        if (keep.length !== before.length) saveMyCourses(keep);
+        if (!hid.has(key)) {
+          hid.add(key);
+          CFG.hidden = Array.from(hid);
+          store.set(KEY.settings, CFG);
+          renderSchedule(); renderMe();
+        }
+        // 复核：这门课在它自己那一周的那一格是不是真的没了。
+        const wk0 = (sch.weeks && sch.weeks.length) ? sch.weeks[0] : shownWeek();
+        const row0 = slotsToRows(sch.slots || [])[0];
+        const still = !!(row0 && (occupancy(wk0)[row0.day + ':' + row0.p0] || [])
+          .some((x) => courseKey(x) === key));
+        return { text: still ? '没删掉：课表里还看得见，再说一次试试。'
+          : ('这台手机的课表上不再显示 ' + sch.name + '，学校那边还在。') };
+      } catch (e) { return { text: '课表没能改，说具体一点再试。' }; }
+    },
+
+    // 🔴 U107：开热水 / 开饮水机改成**真的开**。用户 2026-11-28 明确授权：
+    //    「给他开热水，还有开饮水机的权限，让他开的时候直接弹出一个是否确认，
+    //      点了确认之后马上开」。
+    //    安全边界照旧：这两个在白名单里是高危工具，AI 每次都得先弹确认，
+    //    确认了才走到这儿；没确认根本不会执行。
+    open_water: async () => {
+      try {
+        const devs = (typeof zlDevs === 'function') ? zlDevs() : [];
+        if (!devs.length) {
+          return { text: '还没加过热水表：去「生活 → 住理生活」扫一次表上的码，再让我开。' };
+        }
+        // U109：先在这里把前置条件挡掉，别让 zlWaterStart 顺手弹出登录页 / 面板 ——
+        // 用户正在聊天，界面莫名跳走会以为卡了。
+        if (typeof zlSess === 'function' && !zlSess()) {
+          return { text: '住理还没登录：去「生活 → 住理生活」登一次，再让我开。' };
+        }
+        if (typeof zlLive === 'function' && zlLive()) {
+          return { text: '上一次的热水还没关，先关掉再开。' };
+        }
+        const r = await zlWaterStart(devs[0]);
+        if (r && r.ok) return { text: r.msg || '热水开了，洗完记得关。' };
+        return { text: (r && r.msg) || '没开成，去住理生活页看看。' };
+      } catch (e) { return { text: '没开成：' + ((e && e.message) || '稍后再试') + '。' }; }
+    },
+    open_dispenser: async (args) => {
+      try {
+        const rows = (typeof wtDevRows === 'function') ? wtDevRows() : [];
+        if (!rows.length) return { text: '还没添加饮水机，去「生活」页扫一下机器上的码。' };
+        const want = String((args && args.which) || '').trim();
+        let pick = rows[0];
+        if (want) {
+          pick = rows.find((x) => x.name && x.name === want)
+            || rows.find((x) => x.name && x.name.indexOf(want) >= 0)
+            || rows[0];
+        }
+        const ok = await wtStart(pick.id, pick.name);
+        if (ok) return { text: '开了' + (pick.name ? '（' + pick.name + '）' : '') + '，接完点停止。' };
+        return { text: WT.lastErr || '没开成，去生活页看看。' };
+      } catch (e) { return { text: '没开成：' + ((e && e.message) || '稍后再试') + '。' }; }
+    },
+    // ---- U108：能操控软件本身（用户 2026-11-28：「要让这个 ai 可以操控软件的一切」）
+    open_page: (args) => {
+      try {
+        const want = String((args && args.name) || '').trim();
+        if (!want) return { text: '要打开哪一页？' };
+        // 🔴 U113：快递不是独立页面，是生活页里的「快递取件」弹层
+        //    （菜鸟、淘宝、拼多多、抖音、京东，点了直接跳到对应 App）。
+        //    以前 open_page 里没它，用户说「帮我跳淘宝身份码」只能回「跳不了」。
+        // 🔴 U114：说了哪个 App 就直接跳过去，别再让他自己点一次 ——
+        //    「跳到淘宝身份码」的下一步就是他手机上淘宝那个码的页面。
+        if (/(快递|取件|驿站|身份码|待取|包裹)/.test(want)) {
+          // 助手是全屏面板，不收起来的话跳过去也被它盖着。
+          try { if (window.AI && typeof AI.close === 'function') AI.close(); } catch (e4) {}
+          switchTab('campus');
+          const app = aiJumpApp(want);
+          if (app && typeof jumpGo === 'function') {
+            // 等页面切过去再跳，不然跳转被页面切换吃掉。
+            setTimeout(() => { try { jumpGo(app); } catch (e5) {} }, 150);
+            return { text: '正在跳到「' + app.name + '」，这台手机上没装它就会打开网页版。' };
+          }
+          if (typeof openJumpSheet === 'function') {
+            setTimeout(() => { try { openJumpSheet(); } catch (e5) {} }, 80);
+            toast('快递取件在这儿，点对应 App 直接跳过去');
+            return { text: '打开快递取件了，点你要用的那个 App 就能跳过去。' };
+          }
+          return { text: '这个版本里没有快递取件，更新一下再看看。' };
+        }
+        const hit = AI_PAGES.find((p) => p.k.some((x) => want.indexOf(x) >= 0));
+        if (!hit) return { text: '没有「' + want + '」这一页。' };
+        try { if (window.AI && typeof AI.close === 'function') AI.close(); } catch (e6) {}
+        switchTab(hit.tab);
+        toast('已打开「' + hit.name + '」');
+        return { text: '打开了「' + hit.name + '」。' };
+      } catch (e) { return { text: '页面没打开。' }; }
+    },
+    get_grades: (args) => {
+      try {
+        const g = DATA && DATA.grades;
+        const all = (g && Array.isArray(g.courses)) ? g.courses : [];
+        if (!all.length) {
+          return { text: (g && g.error) ? ('成绩没读到：' + g.error) : '还没有成绩，等出分后同步。' };
+        }
+        const want = String((args && args.term) || '').trim();
+        const hit = want ? all.filter((c) => String(c.term || '').indexOf(want) >= 0) : all;
+        const list = hit.length ? hit : all;
+        const lines = list.slice(0, 20).map((c) => {
+          const sc = c.final || c.score || '';
+          return String(c.name || '') + ' ' + sc + (c.credit ? '（' + c.credit + ' 学分）' : '');
+        });
+        return { text: '共 ' + list.length + ' 门：' + lines.join('；') };
+      } catch (e) { return { text: '成绩没读到。' }; }
+    },
+    get_exams: () => {
+      try {
+        const ex = (DATA && DATA.exams) || null;
+        const bucket = (typeof examBucket === 'function')
+          ? examBucket((ex && ex.semesterId) || '') : null;
+        const list = (bucket && bucket.exams) || [];
+        if (!list.length) {
+          return { text: (bucket && bucket.error) ? ('考试安排没读到：' + bucket.error)
+            : '这个学期还没有考试安排。' };
+        }
+        const lines = list.slice(0, 20).map((e) =>
+          [e.date, e.time, e.name, e.place].filter(Boolean).join(' '));
+        return { text: '共 ' + list.length + ' 场：' + lines.join('；') };
+      } catch (e) { return { text: '考试安排没读到。' }; }
+    },
+    stop_water: async () => {
+      try {
+        if (typeof zlWaterStop !== 'function') return { text: '这个版本关不了水。' };
+        const ok = await zlWaterStop({ retry: 1 });
+        return { text: ok ? '热水关了。' : '没能确认关掉，去住理生活页再点一次。' };
+      } catch (e) { return { text: '关水没成功，去住理生活页点一下。' }; }
+    },
+    stop_dispenser: async () => {
+      try {
+        if (typeof wtStop !== 'function') return { text: '这个版本停不了饮水机。' };
+        await wtStop();
+        return { text: '让它停了，账单出来才算结束。' };
+      } catch (e) { return { text: '没停下来，去生活页点一下停止。' }; }
+    },
+    sync_school: async () => {
+      try {
+        if (typeof doSync !== 'function') return { text: '这个版本不能同步，装最新的安装包。' };
+        await doSync(false);
+        return { text: '同步好了。' };
+      } catch (e) { return { text: '同步没成功：' + ((e && e.message) || '稍后再试') + '。' }; }
+    },
     submit_signin: () => ({
       text: '签到要在「学习」页点具体的那一门课的签到，我不能直接替你提交。'
-    })
+    }),
+
+    // 🔴 U116：真撤销。all=true 退回「他提这件事之前」，否则只退一步。
+    undo: (args) => {
+      try {
+        args = args || {};
+        if (!AI_HIST.length) return { text: '这次打开后我还没改过课表，没有可撤的。' +
+          '要是上次改乱了，直接说「把 X 改回周几」，我按那句改回去。' };
+        const said = String(args.said || '');
+        const all = args.all === true || String(args.all) === 'true'
+          || /(都|全部|所有|统统)/.test(said);
+        const n = all ? AI_HIST.length : 1;
+        const snap = AI_HIST[AI_HIST.length - n];
+        aiSnapRestore(snap);
+        AI_HIST.length = AI_HIST.length - n;
+        // 退回去了得让他看见：跳到这一轮动过的那一周。
+        try {
+          const es = snap.edits || {};
+          let wk = 0;
+          Object.keys(es).forEach((k) => {
+            const e = es[k] || {};
+            [].concat(e.weeks || []).concat(e.skipWeeks || []).forEach((w) => {
+              if (Number(w) > 0 && (!wk || Number(w) < wk)) wk = Number(w);
+            });
+            (e.skipCells || []).forEach((x) => {
+              if (x && Number(x.w) > 0 && (!wk || Number(x.w) < wk)) wk = Number(x.w);
+            });
+          });
+          if (wk) gotoWeek(wk);
+        } catch (e1) {}
+        return { text: all ? '都撤了，课表回到我做这些之前的样子。'
+          : '撤回一步，课表回到刚才没改之前的样子。' };
+      } catch (e) { return { text: '没撤上，再说一次试试。' }; }
+    }
+  };
+
+  /* 改课表这几个工具动手前先存快照 —— 撤销才有东西可还原。
+   * 🔴 只有状态**真的变了**才留这份快照：模型经常调了工具却什么也没改，
+   *    那种空操作留在栈里，用户说「撤销」只会原地退一格。 */
+  ['add_course', 'update_course', 'delete_course', 'move_day'].forEach((n) => {
+    const impl = AI_TOOLS[n];
+    if (typeof impl !== 'function') return;
+    AI_TOOLS[n] = (args) => {
+      const before = aiClone({ edits: courseEdits(), my: myCourses(), hidden: CFG.hidden || [] });
+      const r = impl(args);
+      const after = JSON.stringify([courseEdits(), myCourses(), CFG.hidden || []]);
+      if (JSON.stringify([before.edits, before.my, before.hidden]) !== after) {
+        aiSnapPush(before, n === 'add_course' ? '加了课' : n === 'delete_course' ? '删了课'
+          : n === 'move_day' ? '整天调了课' : '改了课');
+      }
+      return r;
+    };
+  });
+
+  AI.registerTools(AI_TOOLS);
+
+  // U106：把「今天是第几周、课表里有哪些课」交给对话层。
+  // 只给课程名 / 老师 / 教室这三样；账号、一卡通号、登录凭据一律不给。
+  if (typeof AI.setContext === 'function') AI.setContext(() => {
+    const d = new Date();
+    const di = (d.getDay() + 6) % 7;
+    const seen = new Set();
+    const courses = [];
+    allCourses().forEach((c) => {
+      const n = String((c && c.name) || '').trim();
+      if (!n || seen.has(n)) return;
+      seen.add(n);
+      courses.push({
+        name: n,
+        teacher: String(c.teacher || '').trim(),
+        room: String(c.room || '').trim()
+      });
+    });
+    return {
+      today: (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日',
+      weekday: DAY_CN[di],
+      week: currentWeek(),
+      total: totalWeeks(),
+      courses: courses
+    };
   });
 }
 
 if (BG_MODE) bgStart();
-else boot();
+else {
+  boot();
+  // 升级后第一次打开，弹一次「这次改了什么」。不跟 boot 串行：
+  // boot 里有登录和网络等待，等它跑完再弹可能已经十几秒后了。
+  setTimeout(whatsNewCheck, 300);
+}

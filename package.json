@@ -2,7 +2,7 @@
   "name": "jiangcaitong",
   "private": true,
   "scripts": {
-    "test": "node tests/smoke.test.js && node tests/update.test.js"
+    "test": "node tests/run-all.js"
   },
   "dependencies": {
     "jsdom": "^31.0.1"

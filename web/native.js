@@ -271,6 +271,41 @@
     return { ok: false, error: '暂时检查不了更新', tried: tried };
   }
 
+  // ------------------------------------------------------------------ 插件市场
+  /* 插件市场取文本：清单 index.json 和插件代码 .js 都从这里过。
+   *
+   * 🔴 2026-11-28 U118：用户定的是「插件只能在 GitHub 上下载」。这条通道拿到的东西
+   *    会被当代码执行，所以**域名白名单是唯一的门** —— 不写 Gitee 备援，
+   *    也不接受调用方随便传个地址进来。多一个源，就多一个能改 App 行为的地方。
+   * 🔴 512KB 上限：插件就是个界面小组件，正常十几 KB。超了要么放错文件，
+   *    要么被人塞了别的东西 —— 宁可装不上。
+   * 🔴 走 http() 而不是 fetch()：WebView 里跨域会被拦，原生这条路没有 CORS 这回事。
+   */
+  var PLUGIN_HOSTS = ['raw.githubusercontent.com', 'github.com', 'objects.githubusercontent.com'];
+  var PLUGIN_MAX = 512 * 1024;
+  async function pluginFetch(url) {
+    var u = String(url || '').trim();
+    if (!/^https:\/\//i.test(u)) return { ok: false, error: '地址不安全' };
+    var host = '';
+    try { host = String(new URL(u).hostname || '').toLowerCase(); } catch (e) { return { ok: false, error: '地址不对' }; }
+    if (PLUGIN_HOSTS.indexOf(host) < 0) return { ok: false, error: '只允许从 GitHub 下载' };
+    var r = null;
+    var timer = null;
+    try {
+      var req = http('GET', u, '', '', 0, { 'Cache-Control': 'no-cache' });
+      var guard = new Promise(function (resolve) {
+        timer = setTimeout(function () { resolve(null); }, UPD_TIMEOUT);
+      });
+      r = await Promise.race([req, guard]);
+    } catch (e) { r = null; }
+    if (timer) clearTimeout(timer);
+    if (!r || Number(r.status) !== 200) return { ok: false, error: '没连上 GitHub' };
+    var t = String(r.body || '');
+    if (!t) return { ok: false, error: '取到的是空的' };
+    if (t.length > PLUGIN_MAX) return { ok: false, error: '文件太大' };
+    return { ok: true, body: t };
+  }
+
   // ------------------------------------------------------------------ HTML 表格
 
   /** 单元格文字。`<br>` 要变成换行 —— 教务系统拿它分隔多行内容
@@ -8823,6 +8858,10 @@
         if (path === '/api/update/check') {
           return await updCheck(body && body.urls);
         }
+        // 插件市场（U118）：清单和插件代码都只从 GitHub 取，域名白名单在 pluginFetch 里。
+        if (path === '/api/plugin/fetch') {
+          return await pluginFetch(body && body.url);
+        }
         // ---------------- AI 助手（U95⑦，用户自填密钥，可选功能）----------------
         // 🔴 只做转发：JS 把完整 payload 和密钥传进来，这里发一次 POST 拿回 JSON。
         //    密钥由 JS 从本机读、只在这一次请求里作为 header 用，不落日志、不回传。
@@ -8849,7 +8888,17 @@
           } catch (e1) { ar = null; }
           if (!ar || Number(ar.status) !== 200) {
             var st = ar && Number(ar.status);
-            return { ok: false, status: st, error: st === 401 ? '服务密钥不对' : '服务没连上，请稍后再试' };
+            // U104：以前所有非 200 都笼统说「服务没连上」，跟设置页「测试连上了」
+            // 自相矛盾。这里按情况给人话，界面不再出现看不懂的说法。
+            var why;
+            if (!ar) why = '网络没连上，检查一下再试';
+            else if (st === 401) why = '服务密钥不对';
+            else if (st === 402) why = '服务额度用完了';
+            else if (st === 429) why = '问得太快了，等一下再试';
+            else if (st === 400) why = '这次没答上来，清空对话再试一次';
+            else if (st >= 500) why = '服务在忙，稍后再试';
+            else why = '服务暂时没回应，稍后再试';
+            return { ok: false, status: st, error: why };
           }
           var at = String(ar.body || '').trim();
           if (at.charAt(0) !== '{') return { ok: false, error: '服务返回异常' };
@@ -8917,6 +8966,23 @@
     openUrl: function (url) {
       try { Android.openUrl(String(url || '')); return true; }
       catch (e) { return false; }
+    },
+
+    /**
+     * 下载更新包并自己起名（2026-11-28 U125）。返回 'ok' / 'fail' / 'none'。
+     *
+     *  'none' = 这个壳还没有这个接口（装了旧版 APK 的人），界面退回浏览器。
+     *
+     * 🔴 为什么要自己下：Gitee 的附件一律回 `Content-Type: application/zip`，
+     *    文件其实是 .apk。交给浏览器，手机下载器按类型补后缀，用户拿到一个
+     *    「压缩包」，装了没反应。这里把名字和类型都写死，跟服务端无关。
+     */
+    downloadApk: function (url, name) {
+      try {
+        if (!(window.Android && typeof Android.downloadApk === 'function')) return 'none';
+        var r = Android.downloadApk(String(url || ''), String(name || ''));
+        return (r === 'ok') ? 'ok' : 'fail';
+      } catch (e) { return 'fail'; }
     },
 
     /** 别的 App 装了没有。返回 '1' / '0' / 'none'。

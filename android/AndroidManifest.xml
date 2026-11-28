@@ -33,6 +33,11 @@
          会退到「打开列表」那一档。 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- 2026-11-28 U125：更新包下载完要拉起系统安装器。
+         Android 8 起不声明这条，安装 Intent 会被系统直接拒掉（不报错、没反应）。
+         首次安装时系统会问一句「允许来自此应用」，那是正常流程。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- ===== 后台自动检查（0.50.0 v5）=====
          🔴 **故意不加 FOREGROUND_SERVICE**。第一版是「闹钟到点 → 起前台服务」，
             那个写法在 Android 12 起直接不成立（系统禁止应用从后台启动前台服务，
@@ -225,6 +230,17 @@
         <provider
             android:name=".ShareProvider"
             android:authorities="com.jxufe.jiangcaitong.share"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <!-- 下载好的更新包借给系统安装器读（2026-11-28 U125）。
+             🔴 单独一个 provider 而不是复用上面那个：安装器要的是
+                application/vnd.android.package-archive，拿到 text/calendar 会
+                当文本打开。放行规则也钉死成 jiangcaitong-x.y.z.apk 一种名字，
+                别的文件一律不借。 -->
+        <provider
+            android:name=".ApkProvider"
+            android:authorities="com.jxufe.jiangcaitong.apk"
             android:exported="false"
             android:grantUriPermissions="true" />
 

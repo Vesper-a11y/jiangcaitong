@@ -1,11 +1,17 @@
 {
-  "versionName": "1.0.3",
-  "versionCode": 5,
-  "downloadUrl": "https://gitee.com/vesper-a11y/jiangcaitong/releases/download/v1.0.3/jiangcaitong-1.0.3.apk",
+  "versionName": "1.0.4",
+  "versionCode": 6,
+  "downloadUrl": "https://gitee.com/vesper-a11y/jiangcaitong/releases/download/v1.0.4/jiangcaitong-1.0.4.apk",
   "changelog": [
-    "课表顶栏加入学习助手，问一句就能查课表、查电费；密钥只保存在本机",
-    "精简各处提示文字，界面更清爽",
-    "修复部分手机课表挤在一行、个别周次课程不显示的问题",
-    "开水结果按设备实际状态提示"
+    "学习页顶上多了「签到」，和「学习通」「中国大学 MOOC」并排",
+    "老师一发起签到，学习页顶上出来一条「正在签到」，点一下直接进那一场",
+    "「我的」多了插件市场（在课程调整和权限中间）：插件在 GitHub 上下载，能更新、能删除",
+    "市场底部「我也做一个」，点了直接去 GitHub 交插件",
+    "插件现在能自己排版：卡片想画成什么样都行，还能做自己的整页、换整个 App 的外观",
+    "学习助手改课表能辨别周了",
+    "学习助手能开热水，查电费网费，跳转淘宝等",
+    "学习助手回答更短，不再来回说「正在查询」",
+    "对话改成左右气泡，自己说的在右边，它答的在左边",
+    "气泡跟着字数走，一句话就一小块"
   ]
 }
