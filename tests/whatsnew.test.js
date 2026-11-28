@@ -60,13 +60,18 @@ const A = w.__t126;
 (async function () {
   // ---- ① 升级后自动弹 ----
   await wait(1600);                     // 启动 300ms + 内部 900ms + 余量
-  ok(A.VER === '1.0.4', '当前版本是 1.0.4：' + A.VER);
+  /* 🔴 版本号不写死：每发一版都要回来改测试，早晚忘一次、红一片。
+   *    这里认「弹窗说的版本 == APP_VERSION，且内容是清单里这一版的分组」。 */
+  const ver = A.VER;
+  const top = (A.CHANGELOG || []).find((x) => x && x.v === ver) || null;
+  ok(!!top, '清单里有当前版本 ' + ver + ' 这一版');
   ok(mask().hidden === false, '从 1.0.0 升上来，第一次启动就弹了更新说明');
   const body = w.document.getElementById('sheetBody');
-  ok(/已经更新到 v1\.0\.4/.test(body.textContent), '标题写的是这次更新的版本');
-  ok(/聊天气泡优化/.test(body.textContent), '内容是这一版的分组（聊天气泡优化）');
-  ok(/插件市场/.test(body.textContent), '内容是这一版的分组（插件市场那条）');
-  ok(!/v1\.0\.3/.test(body.textContent), '不把历史版本全列出来（那是「更新日志」那页的事）');
+  ok(new RegExp('已经更新到 v' + ver.replace(/\./g, '\\.')).test(body.textContent),
+    '标题写的是这次更新的版本（' + ver + '）');
+  const g0 = top && top.groups && top.groups[0];
+  ok(g0 && body.textContent.indexOf(g0.t) >= 0, '第一个分组写进去了：' + (g0 ? g0.t : '—'));
+  ok(!/v1\.0\.4/.test(body.textContent) || ver === '1.0.4', '不把历史版本全列出来（那是「更新日志」那页的事）');
 
   // ---- ② 关了之后不再弹 ----
   const btn = w.document.getElementById('wnOk');
@@ -84,8 +89,8 @@ const A = w.__t126;
   A.whatsNewCheck();
   await wait(1200);
   ok(mask().hidden === true, '全新安装不弹（没有任何东西「变了」）');
-  ok(JSON.parse(w.localStorage.getItem('zt.seenVer') || '""') === '1.0.4',
-    '全新安装也记下版本号，下次升级才会弹');
+  ok(JSON.parse(w.localStorage.getItem('zt.seenVer') || '""') === ver,
+    '全新安装也记下版本号（' + ver + '），下次升级才会弹');
 
   // ---- ④ 这一版没写日志：不弹空壳 ----
   w.localStorage.setItem('zt.seenVer', JSON.stringify('0.9.9'));

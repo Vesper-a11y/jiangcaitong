@@ -2279,9 +2279,11 @@ function pgQuiet() {
 
 /** 只留下这一页。换页和动画收尾都走这一份，别各写一遍。 */
 function pgOnly(name) {
-  TABS.concat(SUBPAGES).forEach((t) => {
-    const el = $('page-' + t);
-    if (el) el.hidden = (t !== name);
+  /* U132：改成按 DOM 里真实存在的 .page 来收 —— 插件注册的页面（host.route.add）
+   * 不在 TABS/SUBPAGES 这两张表里，按老写法遍历表格会把它漏在外面，
+   * 切页时旧的插件页会压在新页上。 */
+  document.querySelectorAll('.page').forEach((el) => {
+    el.hidden = (el.id !== 'page-' + name);
   });
 }
 
@@ -13828,6 +13830,11 @@ const BUILTIN_CHANGELOG = [
           '「我的」多了插件市场（在课程调整和权限中间）：插件在 GitHub 上下载，能更新、能删除',
           '市场底部「我也做一个」，点了直接去 GitHub 交插件'
       ]},
+      { t: '插件再放开', items: [
+          '插件不再只管自己那张卡：能调 App 的路由、页面、底部导航、设置，也能用原生能力',
+          '插件可以给自己加一整页，也可以往底部加一格，点了直接切过去',
+          '删掉插件的时候，它写过的设置、加过的页面、改过的地方都会清干净，回到装它之前的样子'
+      ]},
       { t: '学习助手', items: [
           '改课表能辨别周了',
           '能开热水，查电费网费，跳转淘宝等',
@@ -21275,6 +21282,206 @@ async function pluginFetchCode(p) {
 /** 跑插件代码，拿它登记的那张卡。
  *  🔴 只交出几个函数（toast / data / week），不把 window 递进去 ——
  *     插件不该能改别处。 */
+/* ===== 插件宿主与账本（2026-11-28 U132：完全放开）=====
+ *
+ * 用户原话：「JS 插件完全放开宿主权限，不做能力隔离。插件可以调用宿主里几乎所有
+ * Kotlin、Compose 相关方法：注册/替换路由、修改任意页面 UI、改动底部导航、读写
+ * 全部本地配置、调用原生工具类。不用做权限白名单拦截。
+ * 但是保留两条底线：
+ *   1. 插件不能删除、覆盖主 App 本体的源码/安装包文件；
+ *   2. 销毁插件上下文、卸载插件时，插件带来的所有界面改动、状态修改全部清理复原。」
+ *
+ * 说明一句现实：这个 App 的界面是 WebView 里的 HTML/CSS/JS，不是 Compose。
+ * 所以「Kotlin / Compose 方法」在这里对应的是「宿主全部 JS 函数 + 原生桥接
+ * NativeApi / Android 上的全部方法」—— 下面 host 把这两层整块摊开。
+ *
+ * 三条落地方式（都不靠白名单）：
+ *   ① 不再限制插件能碰什么：host 把路由、页面、底部导航、配置、存储、原生桥接
+ *      全给出去；插件代码本身也跑在全局作用域，全局函数本来就能直接调。
+ *   ② 底线 1：App 源码在 assets 里，WebView 对它只读；安装包在应用私有目录，
+ *      JS 侧没有任何「写文件 / 删文件」的入口。原生那层再加一道 guardPath，
+ *      带路径的调用先看是不是安装包或 assets，是就直接拒（见 NativeBridge.java）。
+ *   ③ 底线 2：卸载时「还账 + 重载」。插件经 host 写过的每个存储键，都记下了
+ *      安装前的原值，卸载时逐个还回去；界面、路由、底部导航这些内存里的改动，
+ *      卸载后重载一次就全没了 —— 不管插件改得多乱，重载完就是原样。
+ *      不做「猜插件改了什么」的反向分析：那玩意儿永远漏，重载才是确定的答案。
+ */
+const PLG_LEDGER = Object.create(null);   // pid -> { keys: Map<键, 安装前的原始字符串|null> }
+const PLG_PAGES = [];                     // 插件注册的页面名，pgOnly 要认
+
+function plgLedger(pid) {
+  const k = String(pid || '');
+  if (!PLG_LEDGER[k]) PLG_LEDGER[k] = { keys: new Map() };
+  return PLG_LEDGER[k];
+}
+
+/** 记下某个存储键「插件动手之前」的样子。同一个键只记第一次。 */
+function plgNoteKey(pid, key) {
+  const L = plgLedger(pid);
+  const k = String(key || '');
+  if (!k || L.keys.has(k)) return;
+  let raw = null;
+  try { raw = localStorage.getItem(k); } catch (e) { raw = null; }
+  L.keys.set(k, raw);
+}
+
+/** 卸载时还账：插件写过的键全部退回安装前（原来没有的就删掉）。 */
+function plgUndoKeys(pid) {
+  const L = PLG_LEDGER[String(pid || '')];
+  if (!L) return 0;
+  let n = 0;
+  L.keys.forEach((raw, k) => {
+    try {
+      if (raw == null) localStorage.removeItem(k);
+      else localStorage.setItem(k, raw);
+      n++;
+    } catch (e) { /* 存不下也无所谓：重载之后界面还是干净的 */ }
+  });
+  L.keys.clear();
+  return n;
+}
+
+/** 交给插件的宿主面。不裁剪、不白名单 —— 想调什么直接调。 */
+function pluginHost(pid) {
+  const note = (k) => plgNoteKey(pid, k);
+  const doc = document;
+  const qsa = (sel, root) => Array.prototype.slice.call((root || doc).querySelectorAll(sel));
+
+  const cfg = {
+    /* 直接给 CFG 本体：改了内存里的值立刻生效；要落盘再调 save()。 */
+    all() { return CFG; },
+    get(k, d) { return (k in CFG) ? CFG[k] : d; },
+    set(k, v) { CFG[k] = v; return true; },
+    save() { note(KEY.settings); return store.set(KEY.settings, CFG); },
+  };
+
+  const storeApi = {
+    get(k, d) { return store.get(k, d); },
+    set(k, v) { note(k); return store.set(k, v); },
+    del(k) { note(k); return store.del(k); },
+    raw(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    keys() { try { return Object.keys(localStorage); } catch (e) { return []; } },
+  };
+
+  const route = {
+    go(name) { try { switchTab(String(name)); return true; } catch (e) { return false; } },
+    back() { closePluginPage(); },
+    cur() { return CUR_PAGE; },
+    /** 注册一整页（左侧返回、标题、内容都归插件）。重名会被拒。 */
+    add(o) {
+      const d = o || {};
+      const name = String(d.name || '').trim();
+      if (!name || doc.getElementById('page-' + name)) return false;
+      const scope = 'plg:' + pid + ':' + name;
+      const sec = doc.createElement('section');
+      sec.className = 'page';
+      sec.id = 'page-' + name;
+      sec.hidden = true;
+      sec.setAttribute('data-plgpage', scope);
+      sec.innerHTML =
+        '<header class="pagehead">' +
+          '<button class="ghost-btn back" type="button" aria-label="返回">' +
+            '<svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>' +
+          '<h1></h1></header>' +
+        '<div class="scroll"><div class="plgpg-in"></div></div>';
+      sec.querySelector('h1').textContent = String(d.title || name);
+      const inner = sec.querySelector('.plgpg-in');
+      const css = plgScopeCss(d.css || '', '[data-plgpage="' + scope + '"]');
+      if (css) {
+        const st = doc.createElement('style');
+        st.setAttribute('data-plg', scope);
+        st.textContent = css;
+        sec.appendChild(st);
+      }
+      inner.innerHTML = plgCleanHtml(d.html || '');
+      sec.querySelector('.back').addEventListener('click', () => {
+        try { switchTab(String(d.back || 'campus')); } catch (e) { /* 回不去就待着 */ }
+      });
+      (doc.querySelector('main') || doc.body).appendChild(sec);
+      PLG_PAGES.push(name);
+      return true;
+    },
+    remove(name) {
+      const n = String(name || '');
+      const sec = doc.getElementById('page-' + n);
+      if (!sec) return false;
+      if (CUR_PAGE === n) { try { switchTab('campus'); } catch (e) { /* 已经在走 */ } }
+      if (sec.parentNode) sec.parentNode.removeChild(sec);
+      const i = PLG_PAGES.indexOf(n);
+      if (i >= 0) PLG_PAGES.splice(i, 1);
+      return true;
+    },
+    list() { return qsa('.page').map((el) => el.id.replace(/^page-/, '')); },
+  };
+
+  const nav = {
+    list() {
+      return qsa('.tab').map((b) => ({
+        tab: b.dataset.tab || '',
+        label: ((b.querySelector('span') || {}).textContent || '')
+      }));
+    },
+    /** 底部加一格。before 写现有 tab 名就插在它前面，不写就排在最后。 */
+    add(o) {
+      const d = o || {};
+      const tab = String(d.tab || '').trim();
+      const bar = doc.querySelector('.tabbar');
+      if (!tab || !bar || bar.querySelector('.tab[data-tab="' + tab + '"]')) return false;
+      const b = doc.createElement('button');
+      b.className = 'tab';
+      b.dataset.tab = tab;
+      b.innerHTML = String(d.icon || '') + '<span></span>';
+      b.querySelector('span').textContent = String(d.label || tab);
+      b.addEventListener('click', () => { try { switchTab(tab); } catch (e) { /* 忽略 */ } });
+      const at = d.before ? bar.querySelector('.tab[data-tab="' + d.before + '"]') : null;
+      if (at) bar.insertBefore(b, at); else bar.appendChild(b);
+      return true;
+    },
+    remove(tab) {
+      const t = String(tab || '');
+      const b = doc.querySelector('.tabbar .tab[data-tab="' + t + '"]');
+      if (!b) return false;
+      if (b.parentNode) b.parentNode.removeChild(b);
+      if (CUR_PAGE === t) { try { switchTab('schedule'); } catch (e) { /* 忽略 */ } }
+      return true;
+    },
+    setLabel(tab, text) {
+      const s = doc.querySelector('.tabbar .tab[data-tab="' + String(tab) + '"] span');
+      if (!s) return false;
+      s.textContent = String(text == null ? '' : text);
+      return true;
+    },
+    setIcon(tab, svg) {
+      const b = doc.querySelector('.tabbar .tab[data-tab="' + String(tab) + '"]');
+      if (!b) return false;
+      const old = b.querySelector('svg');
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+      const tmp = doc.createElement('span');
+      tmp.innerHTML = String(svg || '');
+      const fresh = tmp.querySelector('svg');
+      if (fresh) b.insertBefore(fresh, b.firstChild);
+      return true;
+    },
+  };
+
+  return {
+    id: pid,
+    win: window,
+    doc: doc,
+    cfg: cfg,
+    store: storeApi,
+    route: route,
+    nav: nav,
+    native: (typeof NativeApi !== 'undefined') ? NativeApi : null,
+    android: (typeof Android !== 'undefined') ? Android : (window.Android || null),
+    version: APP_VERSION,
+    toast(msg, ms) { toast(String(msg || ''), ms || 2000); },
+    $(sel, root) { return (root || doc).querySelector(sel); },
+    $$(sel, root) { return qsa(sel, root); },
+    esc: esc,
+  };
+}
+
 function pluginParse(code, meta) {
   const id = meta.id;
   const out = { id: id, name: meta.name || id, tag: meta.tag || '插件', ver: String(meta.ver || '') };
@@ -21332,7 +21539,9 @@ function pluginParse(code, meta) {
     }
   };
   // sourceURL 指到插件 id：万一它抛错，日志里能看出是谁。
-  const fn = new Function('plugin',
+  // U132：第二个参数 host = 整套宿主能力（路由/页面/导航/配置/存储/原生），不裁剪。
+  const host = pluginHost(id);
+  const fn = new Function('plugin', 'host',
     '"use strict";\n' + code + '\n//# sourceURL=jct-plugin-' + id + '.js');
   /* 🔴 插件里写 `plugin({...})` 的那个 plugin 是**函数**，而插件在 stats()/state()
    *    里还会写 `plugin.week()`。所以这些方法必须挂在同一个函数对象上 ——
@@ -21341,7 +21550,12 @@ function pluginParse(code, meta) {
    *    （U118 自己踩的：示例插件一上线，状态栏空着。） */
   const entry = function (def) { api2.widget(def); };
   Object.keys(api2).forEach((k) => { if (k !== 'widget') entry[k] = api2[k]; });
-  fn(entry);
+  // U132：`plugin.host` 是整套宿主，`plugin.win` 是 window 本身 —— 两个都摆上，
+  // 插件想用哪种写法都行（`plugin.host.route.go('me')` 或直接 `switchTab('me')`）。
+  entry.host = host;
+  entry.win = host.win;
+  entry.doc = host.doc;
+  fn(entry, host);
   return out;
 }
 
@@ -21816,6 +22030,8 @@ function pluginRemove(id) {
   store.set(KEY.plugins, has);
   store.del(pluginCodeKey(id));
   const wid = 'plg:' + id;
+  // 底线 ②（U132）：外观样式先摘掉。
+  try { pluginStyleApply(wid, ''); } catch (e) { /* 没样式就不用摘 */ }
   const on = lifeOn();
   const i = on.indexOf(wid);
   if (i >= 0) {
@@ -21826,6 +22042,15 @@ function pluginRemove(id) {
   pluginMountCards();
   renderLifeWidgets();
   pluginPaintEntry();
+  /* 还账放在最后：上面那句 store.set(KEY.settings, CFG) 会把内存里的 CFG
+   * 整个写回本机设置，早还账等于白还（第一版就栽在这儿，测试逮住了）。 */
+  try { plgUndoKeys(id); } catch (e) { /* 还不了也有下面那次重载兜底 */ }
+  /* 底线 ②：路由、页面、底部导航、插件塞进 DOM 的东西，全在内存里。
+   * 重载一次就回到插件装上之前的样子 —— 这是唯一确定的做法：
+   * 反过来去猜「它到底改过哪儿」，永远会漏一处。 */
+  setTimeout(() => {
+    try { location.reload(); } catch (e) { /* 重载不了就停在已经清干净的状态 */ }
+  }, 120);
 }
 
 /** 卡片上「谁提交的、什么时候」那一行（U119，用户要求放在上面）。
