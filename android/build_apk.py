@@ -78,9 +78,11 @@ if os.environ.get("JAVA_HOME"):
     _jdk_cands.append(Path(os.environ["JAVA_HOME"]))
 JDK = _first(*_jdk_cands)
 
-JAVA = JDK / "bin" / "java.exe"
-JAVAC = JDK / "bin" / "javac.exe"
-KEYTOOL = JDK / "bin" / "keytool.exe"
+# CI 在 Linux 上跑时这些命令没有 .exe 后缀（.github/workflows/release.yml）
+_EXE = ".exe" if os.name == "nt" else ""
+JAVA = JDK / "bin" / ("java" + _EXE)
+JAVAC = JDK / "bin" / ("javac" + _EXE)
+KEYTOOL = JDK / "bin" / ("keytool" + _EXE)
 
 # 国内线路（腾讯云 CNB）上这个包的地址前缀 —— 换它等于换一条下载线路，
 # 只在这里写一次，version.json 和发布页都从这儿派生。
@@ -91,8 +93,10 @@ CNB_APK_NAME = "酱菜通.apk"
 # 🔴 2026-11-23 起，版本号**只在这里写一次**。
 #    以前还要手工同步 web/app.js 的两行和 MainActivity 的 UA，漏一处就打不出包。
 #    现在 sync_version() 会在打包前把这两处按这里的值重写（见那个函数的注释）。
-VERSION_NAME = "1.0.2"
-VERSION_CODE = 3
+# CI（.github/workflows/release.yml）用环境变量从 tag 注入版本；本地打包用写死的值。
+# 🔴 versionCode 公式 = 主*10000 + 次*100 + 修订（tag v1.2.3 → 10203）。
+VERSION_NAME = os.environ.get("JCT_VERSION_NAME", "1.0.2")
+VERSION_CODE = int(os.environ.get("JCT_VERSION_CODE", "3"))
 PKG = "com.jxufe.jiangcaitong"
 
 # 2026-11-01：`--debug` 让 APK 带 debuggable=true（aapt2 的 --debug-mode）。
@@ -100,10 +104,16 @@ PKG = "com.jxufe.jiangcaitong"
 # 🔴 打包时的 versionCode 与正式版**保持一致** —— 高了以后装不回正式包，
 #    同签名同 code 才能覆盖安装并保留账号数据。
 DEBUG_BUILD = False
+BETA = False            # --beta 时由 main() 置 True（sign() 里用它挑文件名）
 MIN_SDK = 23
 TARGET_SDK = 33
 
-KEYSTORE = SDK.parent / "keystore" / "jiangcaitong.keystore"
+# CI 把 keystore（base64 Secret）解到临时目录后用 JCT_KEYSTORE 指过来。
+KEYSTORE = (Path(os.environ["JCT_KEYSTORE"]) if os.environ.get("JCT_KEYSTORE")
+            else SDK.parent / "keystore" / "jiangcaitong.keystore")
+# CI 上必须给现成密钥：防止「没密钥就现场生成一把」—— 那样的包签名和
+# 已装用户的对不上，覆盖安装会失败。
+REQUIRE_KEYSTORE = os.environ.get("JCT_REQUIRE_KEYSTORE") == "1"
 KS_PASS = os.environ.get("JCT_KS_PASS", "jiangcaitong")
 
 
@@ -122,7 +132,7 @@ def run(cmd, cwd=None, quiet=False):
 
 
 def check_env():
-    for f in (JAVA, JAVAC, BT / "aapt2.exe", BT / "zipalign.exe",
+    for f in (JAVA, JAVAC, BT / ("aapt2" + _EXE), BT / ("zipalign" + _EXE),
               BT / "lib" / "d8.jar", BT / "lib" / "apksigner.jar", ANDROID_JAR):
         if not f.exists():
             raise SystemExit("缺文件：%s\n（先跑 _lab/out/sdk 的下载步骤）" % f)
@@ -256,8 +266,11 @@ def check_version_consistency():
         bad.append("MainActivity 的 UA 后缀是 %s，应为 %s" % (got, VERSION_NAME))
 
     strings = (HERE / "res" / "values" / "strings.xml").read_text(encoding="utf-8")
-    if 'name="app_name">酱菜通<' not in strings:
-        bad.append("strings.xml 里的 app_name 不是「酱菜通」")
+    # beta 双包在打包前刚把 app_name 换成「酱菜通测试版」（打完自动还原），
+    # 所以两种名字都放行；出现第三种名字才算被改坏。
+    if ('name="app_name">酱菜通<' not in strings
+            and 'name="app_name">酱菜通测试版<' not in strings):
+        bad.append("strings.xml 里的 app_name 不是「酱菜通」/「酱菜通测试版」")
 
     # 界面里的版本那一行还在不在（不写死数字，但占位元素不能被删）
     html = (WEB / "index.html").read_text(encoding="utf-8")
@@ -540,48 +553,45 @@ def check_console(dst, beta):
             raise SystemExit("正式版的 %s 里还有没剪掉的 @stats 片段" % f.name)
 
 
-def stage_assets():
+def stage_assets(beta=False):
     """把 web/ 整个搬进 assets/web/ —— APK 里的页面和网页版是同一份代码。
 
     唯一的例外是控制台（数据台）：正式版**不搬**它，还要把 index.html 里
     引着它的那几段剪掉（见 strip_console_html）。
+
+    beta 由 --beta 参数传入（不再靠手改 app.js 的 APP_CHANNEL）；
+    2026-11-28：beta 只换渠道标记，旧的 beta_key / 数据台钥匙注入整套退役
+    （那条 hobson.cc 通道 11-23 就废了）。
     """
     dst = BUILD / "assets" / "web"
     if dst.exists():
         shutil.rmtree(dst)
     dst.mkdir(parents=True)
-    ch = channel()
-    beta = ch == "beta"
+    # 控制台（数据台）两个渠道都不进包：它是旧测试通道（hobson.cc + 钥匙注入）
+    # 的一部分，11-23 起整套退役。beta 只换渠道标记，不再保留控制台。
     for f in WEB.iterdir():
         if not f.is_file():
             continue
-        if f.name in CONSOLE_FILES and not beta:
-            continue                       # 正式版：控制台整个不进包
+        if f.name in CONSOLE_FILES:
+            continue                       # 控制台整个不进包
         shutil.copy2(f, dst / f.name)
     # 索引页里那四段（入口按钮 / 那一页 / 样式 / 脚本）一起剪掉。
-    if not beta:
-        p = dst / "index.html"
-        p.write_text(strip_console_html(p.read_text(encoding="utf-8")),
-                     encoding="utf-8", newline="")
-        print("  正式版：控制台（stats.js / stats.css / 那一页）没有打进包里")
-    # 渠道口令：正式版一句话都不带（正式版根本不请求 /beta/ 那条路径），
-    # 测试版才从 deploy/beta_key.txt 读。
+    p = dst / "index.html"
+    p.write_text(strip_console_html(p.read_text(encoding="utf-8")),
+                 encoding="utf-8", newline="")
+    print("  控制台（stats.js / stats.css / 那一页）没有打进包里")
     js = (dst / "app.js").read_text(encoding="utf-8")
     if beta:
-        out = inject_beta_key(js)
-        print("  测试版：通道口令已注入（来自 deploy/beta_key.txt）")
-        # 数据台的钥匙只在这一个文件里。先抹再注入：万一谁往源码里写过一把，
-        # 这一步保证包里只有工作区那一把（`mobile/` 是公开仓库）。
-        sp = dst / "stats.js"
-        sj = inject_stats_key(strip_stats_key(sp.read_text(encoding="utf-8")))
-        sp.write_text(sj, encoding="utf-8", newline="")
-        print("  测试版：数据台钥匙已注入（来自 deploy/stats_key.txt）")
+        # 测试版：只把渠道标记换成 beta，app.js 靠它在运行时隐藏全部更新入口。
+        old = "const APP_CHANNEL = 'stable';"
+        assert old in js, "app.js 里找不到 APP_CHANNEL，换不了渠道"
+        js = js.replace(old, "const APP_CHANNEL = 'beta';", 1)
+        print("  测试版：APP_CHANNEL 已切成 beta（更新入口全部隐藏，不访问仓库）")
     else:
-        out = js
-        print("  正式版：通道口令为空")
+        print("  正式版：渠道 stable")
     with open(dst / "app.js", "w", encoding="utf-8", newline="") as f:
-        f.write(out)
-    check_console(dst, beta)
+        f.write(js)
+    check_console(dst, False)
     names = sorted(x.name for x in dst.iterdir())
     print("  assets/web: " + ", ".join(names))
     # 网页版那套 Python 服务不在包里，但页面里引用了它 —— 少个文件会白屏，
@@ -591,7 +601,7 @@ def stage_assets():
             raise SystemExit("assets/web 里缺 %s" % need)
 
 
-def compile_res():
+def compile_res(beta=False):
     gen = BUILD / "gen"
     if gen.exists():
         shutil.rmtree(gen)
@@ -600,13 +610,13 @@ def compile_res():
     if res_zip.exists():
         res_zip.unlink()
 
-    run([BT / "aapt2.exe", "compile", "--dir", HERE / "res", "-o", res_zip])
+    run([BT / ("aapt2" + _EXE), "compile", "--dir", HERE / "res", "-o", res_zip])
 
     out_apk = BUILD / "base.apk"
     # ⚠️ 编译产物要当**位置参数**传，不能用 -R：-R 是「覆盖层（overlay）」语义，
     #    会要求每条资源都去覆盖一个已存在的定义，于是每条都报
     #    "does not override an existing resource"。
-    run([BT / "aapt2.exe", "link",
+    run([BT / ("aapt2" + _EXE), "link",
          "-o", out_apk,
          "-I", ANDROID_JAR,
          "--manifest", HERE / "AndroidManifest.xml",
@@ -616,7 +626,9 @@ def compile_res():
          "--target-sdk-version", str(TARGET_SDK),
          "--version-code", str(VERSION_CODE),
          "--version-name", VERSION_NAME,
-         ] + (["--debug-mode"] if DEBUG_BUILD else []) + [
+         ] + (["--debug-mode"] if DEBUG_BUILD else []) \
+           + (["--rename-manifest-package", PKG + ".beta"] if beta else []) \
+           + [
          res_zip])
     return out_apk, gen
 
@@ -674,6 +686,10 @@ def add_dex(apk: Path, dx: Path) -> Path:
 
 
 def sign(apk: Path) -> Path:
+    if REQUIRE_KEYSTORE and not KEYSTORE.exists():
+        raise SystemExit("JCT_REQUIRE_KEYSTORE=1 但找不到签名密钥 %s"
+                         " —— CI 上禁止现场生成新密钥（签名会变，老用户装不上）"
+                         % KEYSTORE)
     if not KEYSTORE.exists():
         KEYSTORE.parent.mkdir(parents=True, exist_ok=True)
         print("  生成签名密钥（只在本地，不进 git）：%s" % KEYSTORE)
@@ -684,13 +700,16 @@ def sign(apk: Path) -> Path:
              "-dname", "CN=JiangCaiTong, OU=Mobile, O=JXUFE, L=Nanchang, ST=Jiangxi, C=CN"])
 
     aligned = BUILD / "aligned.apk"
-    run([BT / "zipalign.exe", "-f", "4", apk, aligned])
+    run([BT / ("zipalign" + _EXE), "-f", "4", apk, aligned])
 
     DIST.mkdir(parents=True, exist_ok=True)
     # 调试包单独一个名字：不能把正式包覆盖掉（正式包要传线上）
     # 测试版带上序号（-v2）：同一版号下会打很多版，不带序号会互相覆盖。
     seq = read_beta_seq()
-    label = "-v%d" % seq if (seq > 0 and not DEBUG_BUILD) else ""
+    if BETA:
+        label = "-beta"          # 测试版：包名/应用名都不一样，文件名也单独起
+    else:
+        label = "-v%d" % seq if (seq > 0 and not DEBUG_BUILD) else ""
     out = DIST / ("jiangcaitong-%s%s%s.apk"
                   % (VERSION_NAME, label, "-debug" if DEBUG_BUILD else ""))
     if out.exists():
@@ -712,7 +731,7 @@ def verify(apk: Path):
                 or "SHA-256 digest" in line or "Number of signers" in line):
             print("  " + line.strip())
 
-    badging = run([BT / "aapt2.exe", "dump", "badging", apk])
+    badging = run([BT / ("aapt2" + _EXE), "dump", "badging", apk])
     for line in badging.splitlines():
         if (line.startswith("package:") or "application-label" in line
                 or "sdkVersion" in line or "targetSdkVersion" in line
@@ -734,62 +753,90 @@ def verify(apk: Path):
 
 
 def main():
-    global DEBUG_BUILD
+    global DEBUG_BUILD, BETA
     ap = argparse.ArgumentParser(description="打包 酱菜通 APK")
     ap.add_argument("--clean", action="store_true")
     ap.add_argument("--beta", action="store_true",
-                    help="打测试用的包（文件名带 vN 序号，方便区分）。"
-                         "2026-11-23 起不再有「渠道门槛」：检查更新已删，"
-                         "写不写 version.json 都不影响任何人")
+                    help="打测试版：包名加 .beta 后缀、应用名「酱菜通测试版」、"
+                         "app.js 渠道切 beta（更新入口全部隐藏）。"
+                         "和正式版可以共存安装，数据互相隔离")
     ap.add_argument("--manifest", action="store_true",
-                    help="打完顺手重写 version.json（默认不写：App 已经不查更新了）")
+                    help="打完顺手重写 version.json（默认不写：正式发版由 CI 生成清单）")
     ap.add_argument("--debug", action="store_true",
                     help="打成 debuggable（真机上开 WebView 调试量尺寸用），"
                          "versionCode 不变，能覆盖安装并保留数据")
     args = ap.parse_args()
     DEBUG_BUILD = bool(args.debug)
     beta = bool(args.beta)
+    BETA = beta
 
-    check_env()
-    # 版本号只写在本文件顶部，剩下两处打包前自动对齐（2026-11-23）
-    sync_version()
-    check_version_consistency()
-    if args.clean and BUILD.exists():
-        shutil.rmtree(BUILD)
-    BUILD.mkdir(parents=True, exist_ok=True)
-
-    print("\n1/6 收网页资源")
-    stage_assets()
-    print("2/6 编译资源（aapt2）")
-    apk, gen = compile_res()
-    print("3/6 编译 Java")
-    classes = compile_java(gen)
-    print("4/6 转 dex（d8）")
-    dx = dex(classes)
-    print("5/6 打包 + 对齐 + 签名")
-    add_dex(apk, dx)
-    out = sign(apk)
-    print("6/6 校验")
-    verify(out)
-
-    size = out.stat().st_size
-    # 2026-11-23：检查更新模块删掉之后，version.json / beta.json 已经没有任何
-    # 地方读它们了（App 不查更新，发布页也不再对外）。所以默认不写 ——
-    # 少一步、也少一个「RELEASE-NOTES 里没有本版本那一节」的打不出包的理由。
-    # 哪天真要对外发，加 --manifest 手动写。
-    if DEBUG_BUILD:
-        print("\n（调试包：不写任何清单）")
-    elif args.manifest:
-        if beta:
-            write_beta_manifest(out)
-        else:
-            write_manifest(out)
+    if beta:
+        # beta 双包要改三处「身份」：应用名（strings.xml）、分享 provider 的
+        # authorities、Java 里的同名常量 —— 后两处不跟着包名走的话，
+        # stable/beta 两包会抢同一个 provider authority（系统按 authority 查重，
+        # 不看 exported），第二 个包装不上。打完必须原样还原，仓库不能留痕。
+        _beta_patches = [
+            (HERE / "res" / "values" / "strings.xml",
+             '<string name="app_name">酱菜通</string>',
+             '<string name="app_name">酱菜通测试版</string>'),
+            (HERE / "AndroidManifest.xml",
+             'android:authorities="com.jxufe.jiangcaitong.share"',
+             'android:authorities="com.jxufe.jiangcaitong.beta.share"'),
+            (HERE / "src" / "com" / "jxufe" / "jiangcaitong" / "ShareProvider.java",
+             'public static final String AUTHORITY = "com.jxufe.jiangcaitong.share";',
+             'public static final String AUTHORITY = "com.jxufe.jiangcaitong.beta.share";'),
+        ]
+        _restore = []
+        for fp, old, new in _beta_patches:
+            s = fp.read_text(encoding="utf-8")
+            assert old in s, "beta 补丁找不到目标：%s" % fp
+            _restore.append((fp, s))
+            fp.write_text(s.replace(old, new), encoding="utf-8", newline="\n")
+        print("  测试版：应用名 / authorities 已切到 beta（打完自动还原）")
     else:
-        print("\n（跳过 version.json：检查更新已删，那份清单没人读；要写加 --manifest）")
-    print("\n完成：%s（%.2f MB）" % (out, size / 1048576))
-    print("  版本 %s（versionCode %d），包名 %s%s"
-          % (VERSION_NAME, VERSION_CODE, PKG, "，测试版" if (beta and not DEBUG_BUILD) else ""))
-    return 0
+        _restore = []
+    try:
+        check_env()
+        # 版本号只写在本文件顶部（或 CI 环境变量），剩下两处打包前自动对齐
+        sync_version()
+        check_version_consistency()
+        if args.clean and BUILD.exists():
+            shutil.rmtree(BUILD)
+        BUILD.mkdir(parents=True, exist_ok=True)
+
+        print("\n1/6 收网页资源")
+        stage_assets(beta)
+        print("2/6 编译资源（aapt2）")
+        apk, gen = compile_res(beta)
+        print("3/6 编译 Java")
+        classes = compile_java(gen)
+        print("4/6 转 dex（d8）")
+        dx = dex(classes)
+        print("5/6 打包 + 对齐 + 签名")
+        add_dex(apk, dx)
+        out = sign(apk)
+        print("6/6 校验")
+        verify(out)
+
+        size = out.stat().st_size
+        # 清单默认不写：正式发版的 version.json 由 CI 从 tag 生成并传 Release；
+        # 本地想写加 --manifest。
+        if DEBUG_BUILD:
+            print("\n（调试包：不写任何清单）")
+        elif args.manifest:
+            write_manifest(out)
+        else:
+            print("\n（跳过 version.json：正式发版由 CI 生成；本地要写加 --manifest）")
+        print("\n完成：%s（%.2f MB）" % (out, size / 1048576))
+        print("  版本 %s（versionCode %d），包名 %s%s"
+              % (VERSION_NAME, VERSION_CODE, PKG,
+                 "，测试版" if (beta and not DEBUG_BUILD) else ""))
+        return 0
+    finally:
+        for fp, s in _restore:
+            fp.write_text(s, encoding="utf-8", newline="\n")
+        if _restore:
+            print("  测试版补丁已还原")
 
 
 if __name__ == "__main__":

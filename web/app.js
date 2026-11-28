@@ -142,6 +142,11 @@ const APP_CODE = 3;
  *    打包脚本 sync_version() 会把它写成 'stable'。 */
 const APP_CHANNEL = 'stable';
 
+/* 测试版总开关（2026-11-28）：打包脚本对测试包会把上一行切成 'beta'。
+ * beta 包：不检查更新、不访问 GitHub/Gitee、关于弹层里没有更新入口和项目链接 ——
+ * 一切更新相关的行为在这里一刀断掉，代码其他地方不用再各自判断。 */
+const NO_UPDATE = (APP_CHANNEL === 'beta');
+
 /* 测试版序号（2026-11-07 起）：同一版号下的 v1 / v2 / v3…，正式版永远是 0。
  *
  * 用户原话：「以 0.49.2 的测试版 v1，v2 之类的来称呼非正式版本」。
@@ -178,7 +183,10 @@ const UPDATE_GITHUB_JSON = 'https://github.com/' + UPDATE_OWNER + '/' + UPDATE_R
 const UPDATE_GITEE_JSON = 'https://gitee.com/' + UPDATE_OWNER + '/' + UPDATE_REPO +
   '/raw/master/version.json';
 const UPDATE_BACKUP_JSON = '';   // ← 第三个备援（可选，如 COS）；留空不启用
-const UPDATE_JSON_URLS = [UPDATE_GITHUB_JSON, UPDATE_GITEE_JSON, UPDATE_BACKUP_JSON].filter(Boolean);
+// 测试版地址列表直接置空：就算别处漏了判断，也没有任何 URL 可请求。
+const UPDATE_JSON_URLS = NO_UPDATE
+  ? []
+  : [UPDATE_GITHUB_JSON, UPDATE_GITEE_JSON, UPDATE_BACKUP_JSON].filter(Boolean);
 // 「关于」弹层底部两个入口：Gitee 老仓库 + GitHub 新仓库，都保留。
 const PROJECT_HOME_GITEE = 'https://gitee.com/' + UPDATE_OWNER + '/' + UPDATE_REPO;
 const PROJECT_HOME_GITHUB = 'https://github.com/' + UPDATE_OWNER + '/' + UPDATE_REPO;
@@ -13460,6 +13468,7 @@ function updNewer(remote, cur) {
 
 /** 查一次更新。`silent` = 启动时自动查：有新版本只标状态、不弹窗打扰。 */
 async function checkUpdate(silent) {
+  if (NO_UPDATE) return { state: 'none', at: Date.now() };   // 测试版：绝不发请求
   if (!NATIVE) return UPDATE_LAST;          // 网页版没有这条数据通道
   const setStatus = (text) => {
     const el = $('aboutUpdateState');
@@ -13506,23 +13515,45 @@ function openAboutSheet() {
     ? '<div class="about-log">' + notes.map((s) =>
         '<div class="about-logline">' + esc(s) + '</div>').join('') + '</div>'
     : '<div class="sh-sub">安装后首次检查会显示这里的更新说明。</div>';
-  $('sheetBody').innerHTML =
-    '<div class="sh-title">关于</div>' +
-    '<div class="about-card">' +
-      '<button type="button" class="about-row" id="aboutVerBtn">' +
-        '<span class="ak">App 版本</span>' +
-        // 🔴 2026-11-25：状态从版本号下面那一行挪到同一行右侧 —— 原来单独占
-        //    一行把弹层撑高，用户：「放他下面太占位置了，可以放右边」。
-        '<span class="av">v' + esc(APP_VERSION) +
-          '<span class="about-state" id="aboutUpdateState"></span>' +
-          '<span class="about-refresh" aria-hidden="true">↻</span></span>' +
-      '</button>' +
-      '<button type="button" class="about-row" id="aboutLogBtn">' +
-        '<span class="ak">更新日志</span>' +
+  // 测试版（NO_UPDATE）：没有更新状态/更新日志，也没有项目链接 —— 不访问仓库。
+  const verCard = NO_UPDATE
+    ? '<div class="about-card">' +
+        '<div class="about-row">' +
+          '<span class="ak">App 版本</span>' +
+          '<span class="av">v' + esc(APP_VERSION) + ' 测试版</span>' +
+        '</div>' +
+      '</div>'
+    : '<div class="about-card">' +
+        '<button type="button" class="about-row" id="aboutVerBtn">' +
+          '<span class="ak">App 版本</span>' +
+          // 🔴 2026-11-25：状态从版本号下面那一行挪到同一行右侧 —— 原来单独占
+          //    一行把弹层撑高，用户：「放他下面太占位置了，可以放右边」。
+          '<span class="av">v' + esc(APP_VERSION) +
+            '<span class="about-state" id="aboutUpdateState"></span>' +
+            '<span class="about-refresh" aria-hidden="true">↻</span></span>' +
+        '</button>' +
+        '<button type="button" class="about-row" id="aboutLogBtn">' +
+          '<span class="ak">更新日志</span>' +
+          '<span class="about-arrow" aria-hidden="true">›</span>' +
+        '</button>' +
+        '<div id="aboutLogBox" hidden>' + logHtml + '</div>' +
+      '</div>';
+  // 2026-11-27：两个项目入口都保留 —— Gitee 老仓库 + GitHub 新仓库。
+  // 文案是正常软件话术（不出现「发我 / 找我」），点一下直接在浏览器打开。
+  // 🔴 测试版（NO_UPDATE）不放这些链接：测试包不访问 GitHub/Gitee。
+  const starHtml = NO_UPDATE
+    ? ''
+    : '<button type="button" class="about-row about-star" id="aboutStarGiteeBtn">' +
+        '<span class="ak">觉得这款软件好用？去 Gitee 点个 Star 支持一下</span>' +
         '<span class="about-arrow" aria-hidden="true">›</span>' +
       '</button>' +
-      '<div id="aboutLogBox" hidden>' + logHtml + '</div>' +
-    '</div>' +
+      '<button type="button" class="about-row about-star" id="aboutStarGithubBtn">' +
+        '<span class="ak">也欢迎去 GitHub 点个 Star</span>' +
+        '<span class="about-arrow" aria-hidden="true">›</span>' +
+      '</button>';
+  $('sheetBody').innerHTML =
+    '<div class="sh-title">关于</div>' +
+    verCard +
     '<div class="about-card">' +
       '<div class="about-row about-qqrow">' +
         '<span class="ak">QQ群</span>' +
@@ -13533,26 +13564,19 @@ function openAboutSheet() {
       '</div>' +
       '<div class="about-hint">交流反馈，加群备注「酱菜通」</div>' +
     '</div>' +
-    // 2026-11-27：两个项目入口都保留 —— Gitee 老仓库 + GitHub 新仓库。
-    // 文案是正常软件话术（不出现「发我 / 找我」），点一下直接在浏览器打开。
-    '<button type="button" class="about-row about-star" id="aboutStarGiteeBtn">' +
-      '<span class="ak">觉得这款软件好用？去 Gitee 点个 Star 支持一下</span>' +
-      '<span class="about-arrow" aria-hidden="true">›</span>' +
-    '</button>' +
-    '<button type="button" class="about-row about-star" id="aboutStarGithubBtn">' +
-      '<span class="ak">也欢迎去 GitHub 点个 Star</span>' +
-      '<span class="about-arrow" aria-hidden="true">›</span>' +
-    '</button>';
+    starHtml;
   $('sheetMask').hidden = false;
   // 给外壳打标，CSS 用 .sheet.about-sheet 收紧留白（比 :has 兼容老 WebView）。
   const shell = $('sheetBody').parentElement;
   if (shell) shell.classList.add('about-sheet');
-  paintAboutUpdate();
-  $('aboutVerBtn').addEventListener('click', () => checkUpdate(false));
-  $('aboutLogBtn').addEventListener('click', () => {
-    const box = $('aboutLogBox');
-    if (box) box.hidden = !box.hidden;
-  });
+  if (!NO_UPDATE) {
+    paintAboutUpdate();
+    $('aboutVerBtn').addEventListener('click', () => checkUpdate(false));
+    $('aboutLogBtn').addEventListener('click', () => {
+      const box = $('aboutLogBox');
+      if (box) box.hidden = !box.hidden;
+    });
+  }
   const qq = $('fbQqCopy');
   if (qq) qq.addEventListener('click', () => {
     if (wtCopy(ABOUT_QQ)) toast('群号已复制');

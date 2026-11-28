@@ -1,0 +1,149 @@
+name: Release
+
+# ============================================================
+# 酱菜通自动发版：只在推送 v* 格式的 tag 时运行。
+#
+# 流程：checkout → Python + JDK17 → 补齐 Android SDK 组件 →
+#       从 tag 解析版本号 → python android/build_apk.py 打包签名 →
+#       生成 version.json → 创建 GitHub Release 并上传 APK + version.json。
+#
+# version.json 只在流水线里临时生成、随 Release 附件上传，
+# 不写回代码仓库（App 的更新检查读的是 Release 附件那份）。
+#
+# 使用步骤（首次配置）：
+#   1. 仓库 Settings → Secrets and variables → Actions → New repository secret：
+#      - JCT_KEYSTORE_B64：签名 keystore 的 base64（不要带 certutil 的
+#        -----BEGIN----- 头尾；解码步骤会自动剥掉它们，多剥不伤）。
+#        Git Bash：base64 -w0 jiangcaitong.keystore
+#        PowerShell：[Convert]::ToBase64String([IO.File]::ReadAllBytes("jiangcaitong.keystore")) | Set-Content ks.b64
+#      - JCT_KS_PASS：keystore 口令（与本地打包用的一致）。
+#   2. 发版：本地打 tag 并推送 ——
+#        git tag v1.0.3 && git push origin v1.0.3
+#      跑完在 Releases 页就能看到 APK + version.json，Release Notes 自动生成。
+#
+# 注意事项：
+#   - 签名：CI 用的密钥必须和本地一直在用的同一把，否则老用户无法覆盖安装
+#     （升级安装要求同签名）。脚本带 JCT_REQUIRE_KEYSTORE=1，Secret 没配会直接
+#     失败，绝不会现场生成一把新密钥装糊涂。
+#   - 工具链版本对齐：本项目不走 Gradle，android/build_apk.py 直接调
+#     build-tools 34.0.0（aapt2/d8/zipalign/apksigner）+ platforms android-33 +
+#     JDK 17。换 SDK 版本要三处一起改：这里、build_apk.py 顶部 BT/ANDROID_JAR、
+#     MIN_SDK/TARGET_SDK。
+#   - versionCode 公式 = 主*10000 + 次*100 + 修订（v1.2.3 → 10203），
+#     与 build_apk.py 顶部注释一致；必须递增，否则老包检测不到新版。
+# ============================================================
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write          # 创建 Release / 上传附件需要的最小权限
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取源码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python 3.11（build_apk.py 是纯 Python 构建）
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 配置 JDK 17（javac / apksigner 都走它）
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 补齐 Android SDK 组件（build-tools 34.0.0 + platform 33）
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "build-tools;34.0.0" "platforms;android-33" > /dev/null
+          echo "SDK 就绪：$ANDROID_HOME"
+
+      - name: 检查签名 Secret 是否已配置
+        env:
+          JCT_KEYSTORE_B64: ${{ secrets.JCT_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$JCT_KEYSTORE_B64" ]; then
+            echo "::error::缺少 Secret JCT_KEYSTORE_B64（keystore 的 base64）。"
+            echo "        到 Settings → Secrets and variables → Actions 添加后再打 tag。"
+            exit 1
+          fi
+
+      - name: 解出签名密钥（只放进临时目录，不落仓库）
+        env:
+          JCT_KEYSTORE_B64: ${{ secrets.JCT_KEYSTORE_B64 }}
+        run: |
+          # 剥掉可能的 PEM 头尾和空白再解码（防御 certutil 产物）
+          python3 - << 'PYEOF'
+          import base64, os, re
+          s = os.environ["JCT_KEYSTORE_B64"]
+          s = re.sub(r"-----[^-]+-----", "", s)
+          s = "".join(s.split())
+          out = os.path.join(os.environ["RUNNER_TEMP"], "jiangcaitong.keystore")
+          open(out, "wb").write(base64.b64decode(s))
+          print("keystore written:", out)
+          PYEOF
+          echo "JCT_KEYSTORE=$RUNNER_TEMP/jiangcaitong.keystore" >> "$GITHUB_ENV"
+
+      - name: 从 tag 解析版本号
+        run: |
+          TAG="${GITHUB_REF_NAME}"                    # 例如 v1.0.3
+          VER="${TAG#v}"                              # 1.0.3
+          if ! echo "$VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::tag 必须是 vX.Y.Z 格式，收到：$TAG"
+            exit 1
+          fi
+          MAJOR=$(echo "$VER" | cut -d. -f1)
+          MINOR=$(echo "$VER" | cut -d. -f2)
+          PATCH=$(echo "$VER" | cut -d. -f3)
+          CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          {
+            echo "JCT_VERSION_NAME=$VER"
+            echo "JCT_VERSION_CODE=$CODE"
+            echo "JCT_APK=jiangcaitong-$VER.apk"
+          } >> "$GITHUB_ENV"
+          echo "版本 $VER / versionCode $CODE"
+
+      - name: 打包（build_apk.py：aapt2 → javac → d8 → zipalign → apksigner）
+        env:
+          JCT_VERSION_NAME: ${{ env.JCT_VERSION_NAME }}
+          JCT_VERSION_CODE: ${{ env.JCT_VERSION_CODE }}
+          JCT_KS_PASS: ${{ secrets.JCT_KS_PASS }}
+          JCT_REQUIRE_KEYSTORE: '1'                 # 没有现成密钥就报错，不现场生成
+        run: |
+          # ANDROID_HOME 是 runner 自带环境变量，只能在这层传给构建脚本
+          HYT_SDK="$ANDROID_HOME" python android/build_apk.py
+          ls -lh android/dist/
+
+      - name: 生成 version.json（只在流水线里临时存在，不提交回仓库）
+        run: |
+          VER="$JCT_VERSION_NAME"
+          CODE="$JCT_VERSION_CODE"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${JCT_APK}"
+          python3 - "$VER" "$CODE" "$URL" "$GITHUB_REF_NAME" << 'PYEOF' > version.json
+import json, sys
+ver, code, url, tag = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+out = {
+    "versionName": ver,
+    "versionCode": code,
+    "downloadUrl": url,
+    "updateLog": "自动发布版本 " + tag,
+}
+print(json.dumps(out, ensure_ascii=False, indent=2))
+PYEOF
+          cat version.json
+
+      - name: 创建 GitHub Release 并上传 APK + version.json
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true              # 自动生成 Release Notes
+          files: |
+            android/dist/${{ env.JCT_APK }}
+            version.json
