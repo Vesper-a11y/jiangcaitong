@@ -1,30 +1,24 @@
-name: Release（已停用自动触发）
+name: Release
 
 # ============================================================
-# 🔴 2026-11-28：自动发版路线**暂不使用**，tag 自动触发已关掉。
-#    正式发版只走交接包 5.1 的手动路线（本地出包 → 重建快照 → 两边传附件）。
-#    保留本文件只为留档、以及以后想启用时改回来；现在只能在 Actions 页
-#    手动点「Run workflow」才会跑，推 v* tag 不会再自动打出包。
+# 2026-11-28：触发规则按用户要求改成**只认 v* tag**。
+#   · 平时往 main 提交代码：什么都不跑，提交记录上不再挂那颗绿勾；
+#   · 打 `v1.0.4` 这种 tag 并推送：才走下面的打包流程（出 APK + 发 Release）。
+#   · 需要补发/重发时，Actions 页手动点「Run workflow」也行。
 #
-#    停用的四个原因（详见交接包 5.1）：
-#      1. 本文件生成的 version.json 用 updateLog 字符串，而 App 只认
-#         changelog / notes 数组（web/native.js:244）→ 用户点「检查更新」会看到空窗口；
-#      2. versionCode 用 主*10000+次*100+修订（v1.0.3 → 10003），
-#         与本地 build_apk.py 默认的 1.0.3=5 分叉，会让更新检查反复提示；
-#      3. generate_release_notes 会把提交标题拼进公开页，措辞不可控；
-#      4. Gitee 侧 Release 附件本来就不自动同步，两边流程仍得分开做。
+# 为什么之前停用过、这次又打开（两个坑已经填了，别再踩回去）：
+#   1. version.json 以前写 `updateLog` 字符串，而 App 只认 `changelog` / `notes`
+#      数组（web/native.js:244）→ 用户点「检查更新」看到的是空窗口。
+#      现在直接拿仓库里那份 version.json 的 `changelog`，只覆盖版本号和下载地址。
+#   2. versionCode 以前按 主*10000+次*100+修订 现算（v1.0.3 → 10003），
+#      而本地 build_apk.py 用的是 web/app.js 里的 APP_CODE（1.0.3 → 5），
+#      两边分叉 → 装完线上包再装本地包，更新检查会一直提示有新版。
+#      现在**唯一来源就是 web/app.js 的 APP_CODE**，本地和 CI 用同一个数。
+#   3. Release 正文用 version.json 的 changelog 拼，不开 generate_release_notes
+#      （提交标题会漏进公开页，措辞不可控）。
+#   4. Gitee 侧附件本来就不自动同步 —— 发完版仍要按交接包 5.1 手动传一次。
 #
-# 原流程说明（留档）：
-#   checkout → Python + JDK17 → 补齐 Android SDK 组件 →
-#   从 tag 解析版本号 → python android/build_apk.py 打包签名 →
-#   生成 version.json → 创建 GitHub Release 并上传 APK + version.json。
-#   version.json 只在流水线里临时生成、随 Release 附件上传，
-#   不写回代码仓库（App 的更新检查读的是 Release 附件那份）。
-#
-# 若以后要重新启用：先修上面 1、2 两处，把 on: 改回 push/tags 'v*'，
-# 补齐下面的 Secret，并同步交接包 5.1 的说明。
-#
-# 首次配置 Secret（仅重新启用时需要）：
+# 首次配置 Secret：
 #   Settings → Secrets and variables → Actions：
 #     - JCT_KEYSTORE_B64：签名 keystore 的 base64（不要带 PEM 头尾，解码步骤会剥）
 #     - JCT_KS_PASS：keystore 口令（与本地打包用的一致）
@@ -35,13 +29,18 @@ name: Release（已停用自动触发）
 # ============================================================
 
 on:
-  workflow_dispatch:        # 仅手动点触发；推 v* tag 不再自动发版
+  push:
+    tags:
+      - 'v*'                # 只有推 v 开头的 tag 才打包发版
+  workflow_dispatch:        # 补发时手动点
 
 permissions:
   contents: write          # 创建 Release / 上传附件需要的最小权限
 
 jobs:
   release:
+    # 只对正式仓库生效：fork 里推 tag 不该发 Release。
+    if: github.repository == 'Vesper-a11y/jiangcaitong'
     runs-on: ubuntu-latest
     steps:
       - name: 拉取源码
@@ -91,18 +90,26 @@ jobs:
           PYEOF
           echo "JCT_KEYSTORE=$RUNNER_TEMP/jiangcaitong.keystore" >> "$GITHUB_ENV"
 
-      - name: 从 tag 解析版本号
+      - name: 从 tag 解析版本号（versionCode 以 web/app.js 的 APP_CODE 为准）
         run: |
-          TAG="${GITHUB_REF_NAME}"                    # 例如 v1.0.3
-          VER="${TAG#v}"                              # 1.0.3
+          TAG="${GITHUB_REF_NAME}"                    # 例如 v1.0.4
+          VER="${TAG#v}"                              # 1.0.4
           if ! echo "$VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::tag 必须是 vX.Y.Z 格式，收到：$TAG"
             exit 1
           fi
-          MAJOR=$(echo "$VER" | cut -d. -f1)
-          MINOR=$(echo "$VER" | cut -d. -f2)
-          PATCH=$(echo "$VER" | cut -d. -f3)
-          CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          # 🔴 只认 app.js 里那个数：本地 build_apk.py 用的也是它。
+          #    两处各算各的，装完线上包再装本地包就会一直提示有新版。
+          CODE=$(grep -oE "const APP_CODE = [0-9]+" web/app.js | grep -oE "[0-9]+" | head -1)
+          NAME_IN_CODE=$(grep -oE "const APP_VERSION = '[^']+'" web/app.js | sed "s/.*'\(.*\)'/\1/")
+          if [ -z "$CODE" ]; then
+            echo "::error::web/app.js 里找不到 APP_CODE"
+            exit 1
+          fi
+          if [ "$NAME_IN_CODE" != "$VER" ]; then
+            echo "::error::tag 是 $VER，但 web/app.js 里 APP_VERSION 是 $NAME_IN_CODE —— 先改版本号再打 tag。"
+            exit 1
+          fi
           {
             echo "JCT_VERSION_NAME=$VER"
             echo "JCT_VERSION_CODE=$CODE"
@@ -121,28 +128,18 @@ jobs:
           HYT_SDK="$ANDROID_HOME" python android/build_apk.py
           ls -lh android/dist/
 
-      - name: 生成 version.json（只在流水线里临时存在，不提交回仓库）
+      - name: 生成 version.json 与 Release 正文（只在流水线里临时存在，不提交回仓库）
         run: |
-          VER="$JCT_VERSION_NAME"
-          CODE="$JCT_VERSION_CODE"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${JCT_APK}"
-          python3 - "$VER" "$CODE" "$URL" "$GITHUB_REF_NAME" << 'PYEOF' > version.json
-import json, sys
-ver, code, url, tag = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
-out = {
-    "versionName": ver,
-    "versionCode": code,
-    "downloadUrl": url,
-    "updateLog": "自动发布版本 " + tag,
-}
-print(json.dumps(out, ensure_ascii=False, indent=2))
-PYEOF
+          # 更新说明取仓库 version.json 里手写的 changelog，脚本在 tools/gen_version.py
+          python3 tools/gen_version.py "$JCT_VERSION_NAME" "$JCT_VERSION_CODE" "$URL"
           cat version.json
 
       - name: 创建 GitHub Release 并上传 APK + version.json
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true              # 自动生成 Release Notes
+          body_path: release-notes.md
+          generate_release_notes: false             # 正文用上面那份，不拼提交标题
           files: |
             android/dist/${{ env.JCT_APK }}
             version.json

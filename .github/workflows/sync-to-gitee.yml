@@ -1,12 +1,17 @@
 name: Sync to Gitee
 
-# GitHub 每次 push 到 main，自动把源码镜像到 Gitee。
+# 把源码镜像到 Gitee。
 # 只在 GitHub 侧配置一个 Secret：GITEE_TOKEN（Gitee 私人令牌，需勾 projects 权限）。
 # 注意：只同步源码分支，Release 附件（APK / version.json）不会自动同步，仍需分别上传。
+#
+# 🔴 2026-11-28：触发规则按用户要求改成**只认 v* tag**。
+#    以前每 push 一次 main 就跑，提交记录上挂满绿勾；现在平时提交什么都不跑，
+#    发版打 tag 时才顺带把源码推到 Gitee（那一刻的代码正好就是发出去的那份）。
 
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
