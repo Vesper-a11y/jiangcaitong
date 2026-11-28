@@ -771,10 +771,11 @@ def main():
     BETA = beta
 
     if beta:
-        # beta 双包要改三处「身份」：应用名（strings.xml）、分享 provider 的
-        # authorities、Java 里的同名常量 —— 后两处不跟着包名走的话，
+        # beta 双包要改这几处「身份」：应用名（strings.xml）、两个 provider 的
+        # authorities、Java 里的同名常量 —— 不跟着包名走的话，
         # stable/beta 两包会抢同一个 provider authority（系统按 authority 查重，
-        # 不看 exported），第二 个包装不上。打完必须原样还原，仓库不能留痕。
+        # 不看 exported），第二个包装不上（报错 -13「内容提供者冲突」）。
+        # 打完必须原样还原，仓库不能留痕。
         _beta_patches = [
             (HERE / "res" / "values" / "strings.xml",
              '<string name="app_name">酱菜通</string>',
@@ -785,13 +786,27 @@ def main():
             (HERE / "src" / "com" / "jxufe" / "jiangcaitong" / "ShareProvider.java",
              'public static final String AUTHORITY = "com.jxufe.jiangcaitong.share";',
              'public static final String AUTHORITY = "com.jxufe.jiangcaitong.beta.share";'),
+            # 下载更新包用的那个 provider 同样是按 authority 查重的。
+            # 2026-11-28：先前只改了分享那个，漏了这个 → 装了测试版之后再装正式版，
+            # 系统报「与已安装应用内容提供者冲突（-13）」，必须卸载测试版才能装。
+            (HERE / "AndroidManifest.xml",
+             'android:authorities="com.jxufe.jiangcaitong.apk"',
+             'android:authorities="com.jxufe.jiangcaitong.beta.apk"'),
+            (HERE / "src" / "com" / "jxufe" / "jiangcaitong" / "ApkProvider.java",
+             'public static final String AUTHORITY = "com.jxufe.jiangcaitong.apk";',
+             'public static final String AUTHORITY = "com.jxufe.jiangcaitong.beta.apk";'),
         ]
         _restore = []
+        _origin = {}
         for fp, old, new in _beta_patches:
             s = fp.read_text(encoding="utf-8")
+            # 同一个文件要改多处（清单里有分享、下载两个 provider），
+            # 只有第一次读到的才是原件；否则还原时会把上一处补丁留下来。
+            if fp not in _origin:
+                _origin[fp] = s
+                _restore.append((fp, s))
             assert old in s, "beta 补丁找不到目标：%s" % fp
-            _restore.append((fp, s))
-            fp.write_text(s.replace(old, new), encoding="utf-8", newline="\n")
+            fp.write_text(s.replace(old, new, 1), encoding="utf-8", newline="\n")
         print("  测试版：应用名 / authorities 已切到 beta（打完自动还原）")
     else:
         _restore = []
