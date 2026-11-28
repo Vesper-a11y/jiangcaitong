@@ -148,7 +148,7 @@ python mobile/harmony/build_hap.py --copy     # 只拷资源
 2. **`window.__nativeDone` 有没有到** —— `ReqBridge.finish()` 那句 `runJavaScript`
    是命门。它不通，界面上所有数据都是空的，而且**不报错**（Promise 永远挂着）。
    现在回执送不到会隔 300ms 再试一次，仍然失败就写 hilog。
-3. **明文 HTTP 有没有被拦** —— 教务是 `http://jwglxt.upstream.edu.cn`，鸿蒙默认只放
+3. **明文 HTTP 有没有被拦** —— 教务是 http 明文，鸿蒙默认只放
    https，而且 `INTERNET` 权限**管不了这件事**（两回事）。
    ⚠️ 2026-11-14 第三轮之后：`network_config.json` + metadata 那套**照旧留着，但不再
    指望它** —— 各家文档对 metadata 的 `name` 写法互相矛盾（GitHub 上 18 个真实工程

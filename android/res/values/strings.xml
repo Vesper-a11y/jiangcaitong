@@ -30,8 +30,4 @@
     <string name="sc_schedule_long">课表</string>
     <string name="sc_exams_short">作业</string>
     <string name="sc_exams_long">作业</string>
-    <string name="sc_rooms_short">空教室</string>
-    <string name="sc_rooms_long">空教室</string>
-    <string name="sc_campus_short">校园</string>
-    <string name="sc_campus_long">校园</string>
 </resources>

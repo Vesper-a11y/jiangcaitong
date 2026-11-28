@@ -1,16 +1,16 @@
 """江西财经大学教务系统（金智 KINGOSOFT）客户端与解析器。
 
-接口和原学校版 `eams.py` 一一对应，bridge.py 换一行 import 就能用：
+接口与上游学校版脚本一一对应：
     login / ensure_login / timetable / grades / exams / semesters /
     profile / plan / todo / room_options / free_rooms
-异常统一收敛到 EamsError（kind 取值和原学校版一致）。
+异常统一收敛到 EamsError（kind 取值和上游版一致）。
 
-和原学校（正方 EAMS）的根本区别：
-  1. 原学校登录页 SHA1(salt-密码)；江财先过统一 CAS，教务这边是 3DES + MD5 token。
-  2. 原学校课表是 JS（TaskActivity + index）；江财课表是**二维 HTML 表格**。
+和上游学校（正方 EAMS）的根本区别：
+  1. 上游学校登录页 SHA1(salt-密码)；江财先过统一 CAS，教务这边是 3DES + MD5 token。
+  2. 上游学校课表是 JS（TaskActivity + index）；江财课表是**二维 HTML 表格**。
   3. 江财有两套学号：登录学号（例如 2023123456）和教务内部代码（例如 201600012345），
      课表接口的 `xh` 用后者，必须先从 SetMainInfo.jsp 取 G_USER_CODE。
-  4. 江财绩点满分 5.0（原学校 4.0）；学期有 `xq=2 第二阶段`；考试要先选轮次。
+  4. 江财绩点满分 5.0（上游学校 4.0）；学期有 `xq=2 第二阶段`；考试要先选轮次。
 
 实测依据：用户 2026-11-23 提供的已登录页面样本（homes / 课表 / 成绩 / 考试）。
 登录 3DES 协议由公开脚本 loginbar.js + SetKingoEncypt.jsp 逆出，**尚未用真实账号实测**。
@@ -43,11 +43,11 @@ UA = (
 
 POLITE_DELAY = 1.2
 
-GPA_SCALE = 5.0  # 🔴 江财是 5 分制，不是原学校的 4 分制
+GPA_SCALE = 5.0  # 🔴 江财是 5 分制，不是上游学校的 4 分制
 
 
 class EamsError(Exception):
-    """登录 / 解析 / 服务异常，统一收敛。kind 取值与原学校 eams.EamsError 一致。"""
+    """登录 / 解析 / 服务异常，统一收敛。kind 取值与上游版一致。"""
 
     def __init__(self, msg: str, kind: str = "", diag: str = "") -> None:
         super().__init__(msg)
@@ -260,7 +260,7 @@ def _course_from_cell(cell_html: str, day: int, row_period: int) -> dict | None:
 
 
 def parse_timetable(html: str) -> dict:
-    """金智二维课表 → 与原学校版同形状的结构。
+    """金智二维课表 → 与上游版同形状的结构。
 
     格子所在列决定 day，行内 `[x-y]` 决定节次（period = 节次-1，0 起）。
     `unitCount` 取江财一天最大节次 12（1-2/3-4/6-7/8-9/10-12，无第 5 节）。
@@ -907,7 +907,7 @@ class EamsClient:
             self._semesters = self._fetch_semesters()
         return self._semesters
 
-    # -- 原学校有、江财暂无对应入口的功能：如实说不支持，不伪装成「没有」
+    # -- 上游学校有、江财暂无对应入口的功能：如实说不支持，不伪装成「没有」
     def todo(self) -> dict:
         return {"items": []}
 

@@ -911,7 +911,7 @@ const totalWeeks = () => {
  *  🔴 2026-11-23，用户截图：学期设置里写着「学期（教务系统原文）
  *     [object Object]」，判年级那句也变成「按入学年 2022 和「[object Object]」
  *     算出来的」。原因是江财这条数据链给的 `DATA.semester` 是**对象**
- *     （`{id, name, xn, xq}`，见 jxufe_native 的 syncOnce），而原学校那套
+ *     （`{id, name, xn, xq}`，见 jxufe_native 的 syncOnce），而上游学校那套
  *     一直给字符串。凡是拿它去拼正则、拼页面文字的地方，全都得先过这里。
  *     连带后果不止难看：`defaultStart()` 拿 "[object Object]" 匹配不到学期，
  *     开学日就退化成「今天所在的周一」—— 课表顶栏因此写着
@@ -6157,7 +6157,7 @@ function openExFilterSheet() {
     '<svg class="ck" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></button>';
   $('sheetBody').innerHTML =
     '<div class="sh-title">筛选平台</div>' +
-    '<div class="sh-sub">勾掉不用的，学习页就只留下你需要的板块。成绩和作业属于学习通。</div>' +
+    '<div class="sh-sub">不用的取消勾选，学习页就只留下你要的板块。成绩和作业属于学习通。</div>' +
     '<div class="picklist">' + opt('cx') + opt('grade') +
     '<div class="exf-div" aria-hidden="true"></div>' + opt('mooc') + '</div>' +
     '<div class="sheetbtns"><button class="btn primary" id="exfDone">完成</button></div>';
@@ -8621,7 +8621,7 @@ function accState() {
 }
 
 // 2026-11-23：江财只有两套学校系统 —— 教务（Cookie）和学习通。
-// 「智慧门户」删了：那是原学校的统一门户，江财的信息门户只服务办事入口，
+// 「智慧门户」删了：那是上游学校的统一门户，江财的信息门户只服务办事入口，
 // App 这边没有对接，留着这一行只会永远显示「未连接」。
 const ACC_SYS = [
   { id: 'jw', k: '教务系统', host: 'jwxt.jxufe.edu.cn' },
@@ -8700,7 +8700,7 @@ function accRows() {
     text: say[s.id], act: act[s.id],
   }));
 
-  // 2026-11-23：财务处这一行删了 —— 那是原学校的「校园统一支付平台」，
+  // 2026-11-23：财务处这一行删了 —— 那是上游学校的「校园统一支付平台」，
   // 江财的电费 / 网费在「智慧江财」微信小程序里，没有可对接的网页接口。
   // 一行永远「还没登录」的账号比没有这一行更让人困惑。
 
@@ -14211,7 +14211,7 @@ $('dirLib').addEventListener('click', () => {
   }
   if (!openExternal(LIB_URL)) toast('打不开浏览器，可以复制链接手动打开');
 });
-// 2026-11-23：公告入口删了（6 个源全是原学校的站，江财的要重写解析）。
+// 2026-11-23：公告入口删了（6 个源全是上游学校的站，江财的要重写解析）。
 // 通知页本身还在文件里，但已经没有入口，这条绑定跟着一起删。
 // 没登慧生活时那颗按钮：账号在「我的 → 账号管理」，直接把人送过去并展开设备登录。
 $('wtGoLogin').addEventListener('click', () => {
@@ -18196,8 +18196,7 @@ function openAutoSheet() {
 }
 
 // ------------------------------------------------------------------ 校历
-/* 数据来源：学校发布的《2026–2027 学年校历》（外国语学院转载的公开页面
-   https://wyx.upstream.edu.cn/info/1051/8303.htm），关键日期逐条人工核对过。
+/* 数据来源：学校发布的《2026–2027 学年校历》（学校官网转载的公开页面），关键日期逐条人工核对过。
 
    🔴 为什么写死在代码里，而不是每次去抓：
       ① 校历一个学年只变一次，天天去抓 364 天是白抓；
@@ -18397,7 +18396,7 @@ function renderCalendar() {
 
 // ------------------------------------------------------------------ 校园（智慧门户）
 /*
- * 这一页装的是**智慧门户**（rhmh.upstream.edu.cn）的东西，跟教务系统是两套账号：
+ * 这一页装的是**智慧门户**（上游学校门户站）的东西，跟教务系统是两套账号：
  *   · 密码不一样（实测自助服务 9 位、门户 10 位）
  *   · 登录要算一道**算术验证码**，而且**错 5 次锁号**
  *
@@ -20642,7 +20641,7 @@ function openLifeWidgetsSheet() {
   const on = lifeOn();
   $('sheetBody').innerHTML =
     '<div class="sh-title">组件</div>' +
-    '<div class="sh-sub">勾掉不用的，生活页就只留下你需要的卡片。</div>' +
+    '<div class="sh-sub">不用的取消勾选，生活页就只留下你要的卡片。</div>' +
     '<div class="picklist">' + LIFE_WIDGETS.map((w) =>
       '<button type="button" class="pickopt' + (on.indexOf(w.id) >= 0 ? ' on' : '') +
       '" data-life="' + w.id + '"><span class="t">' + esc(w.name) + '</span>' +
@@ -21277,13 +21276,13 @@ async function unbindPortal() {
 const PWD_HELP = {
   jw: { name: '教务系统',
         // 江财金智教务没有独立的「重置密码」页，入口就在登录页上。
-        // 别指回原学校的 jwglxt.upstream.edu.cn/eams/resetPassword.action（404）。
+        // 别指回上游学校教务的重置密码页（404）。
         url: 'https://jwxt.jxufe.edu.cn/cas/login.action' },
   cx: { name: '学习通',
         url: 'https://passport2.chaoxing.com/pwd/findpwd?version=1&fid=1286' },
   portal: { name: '智慧门户',
             // 江财没有那套「门户安全中心」的网页，找回密码就在统一身份认证
-            // 登录页上（2026-11-23 起；原来指的是原学校 sfrz.upstream.edu.cn）。
+            // 登录页上（2026-11-23 起；原来指的是上游学校认证站）。
             // ⚠️ 门户这一路现在没有入口（见 ACC_SYS），留着只为不把死链写进包。
             url: 'https://ssl.jxufe.edu.cn/cas/login' },
 };

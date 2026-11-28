@@ -107,7 +107,7 @@ public class NativeBridge {
         });
     }
 
-    /** 江财数据层专用请求通道：回调到 window.__jxufeDone，和原学校那套 waiting 彻底隔离，
+    /** 江财数据层专用请求通道：回调到 window.__jxufeDone，和上游那套 waiting 彻底隔离，
      *  避免两边 seq 撞号导致回调串到对方 Promise。参数和 req2 完全一致。 */
     @JavascriptInterface
     public void reqJxufe(final int id, final String method, final String path,
@@ -362,7 +362,7 @@ public class NativeBridge {
 
     private String doReq(String method, String path, String body, String referer,
                          String headersJson) throws Exception {        // 传绝对地址（http:// 或 https:// 开头）就按原样发，否则拼在教务系统的 BASE 后面。
-        // 为什么需要：校园公告要访问 www.upstream.edu.cn / jwc.upstream.edu.cn 等 6 个站，
+        // 为什么需要：校园公告要访问学校的多个站点（公告入口已删，历史说明），
         // 它们跟教务系统不是同一个域名，写死 BASE + path 根本发不出去。
         // 保持「相对路径拼 BASE」这条老行为不变，是为了不动现有的教务逻辑。
         boolean absolute = path != null
@@ -381,7 +381,7 @@ public class NativeBridge {
                     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             if (referer != null && !referer.isEmpty()) {
                 // 绝对地址的 referer 也按原样用，不然会拼成
-                // http://jwglxt.upstream.edu.cnhttp://www.upstream.edu.cn 这种鬼东西
+                // 教务域名和官网域名拼在一起那种鬼东西
                 boolean refAbsolute = referer.startsWith("http://") || referer.startsWith("https://");
                 c.setRequestProperty("Referer", refAbsolute ? referer : BASE + referer);
             }
@@ -477,7 +477,7 @@ public class NativeBridge {
     }
 
     /** 按响应头 charset 解码；没有 charset 时按调用方给的兜底编码。
-     *  江财金智的 .jsp/.action 是 GBK，原学校老站是 UTF-8 —— 一个方法同时兼容两边。
+     *  江财金智的 .jsp/.action 是 GBK，上游学校老站是 UTF-8 —— 一个方法同时兼容两边。
      *
      *  🔴 1.5.2：响应头声明的编码**不一定可信**。教务 DataTable.jsp 这类页面实测过
      *  「头说 UTF-8、字节其实是 GBK」—— 解出来满屏「锘/绗/鏄」这种乱码，
@@ -1115,7 +1115,7 @@ public class NativeBridge {
      * 同 openWeb，多一个「要不要提示登录已过期」（0.17.3 起）。
      *
      * `warn = false` 用于**公开页**：公告正文（www / jwc / tuanwei 这些新闻站）、
-     * 江财百科（wiki.upstream.fan）。这些页面没有 CASTGC 也照样能看，拿
+     * 江财百科。这些页面没有 CASTGC 也照样能看，拿
      * 「门户登录已过期」去提示它们就是**假消息** —— 用户会以为看个公告还得
      * 重连门户，白跑一趟。
      *

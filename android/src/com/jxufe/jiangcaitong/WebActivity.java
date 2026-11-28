@@ -69,7 +69,7 @@ import org.json.JSONTokener;
  * 那是第三个罐子 —— 所以每次都要重新登录。
  *
  * 这个 Activity 干的事就是：把第一个罐子里的 cookie 倒进第二个罐子，再开网页。
- * 倒过去之后，WebView 访问 xssq.upstream.edu.cn 之类的站点时，CAS 能看见 CASTGC，
+ * 倒过去之后，WebView 访问 CAS 系站点时能看见 CASTGC，
  * 直接发票据放行 —— 一次都不用再登。
  *
  * ================================================================
@@ -713,7 +713,7 @@ public class WebActivity extends Activity {
             // 没有登录态 ⇒ 进去要重新登一次。提前说，别让人以为是 App 坏了。
             // 🔴 只在 `warn` 时才说。以前不管打开什么都提示一句，那会儿这个窗口
             //    只用来开办事系统，所以没露馅。现在公告正文（www/jwc/tuanwei
-            //    这些**公开**新闻站）和江财百科（wiki.upstream.fan）也走这里了，
+            //    这些**公开**新闻站）和江财百科也走这里了，
             //    对它们说「登录已过期」就是假消息 —— 用户会以为看个公告还得
             //    重连门户，然后白跑一趟。
             // 🔴 文案要分家：学习通和学习门户是两套账号，说错了比不说更糟 ——
@@ -1502,8 +1502,8 @@ public class WebActivity extends Activity {
      * 返回：罐子里**有没有这次要用的那张「身份证」**（不是「倒了几条」）。
      *
      * 🔴 两种身份不能混判：
-     *    - 学习门户认 `CASTGC`（在 `sfrz.upstream.edu.cn` 上）。用户点的应用在
-     *      `xssq.upstream.edu.cn` 上 —— 按「目标域名有没有 cookie」判断会永远是 0，
+     *    - 学习门户认 `CASTGC`（在 CAS 认证站域上）。用户点的应用在
+     *      别的域上 —— 按「目标域名有没有 cookie」判断会永远是 0，
      *      但免登录其实是能成的。
      *    - 学习通认 `.chaoxing.com` 域下的 `UID` / `_uid`。拿 CASTGC 去判断
      *      学习通，会在「门户登着、学习通没登」时给出「已过期」的假提示；
@@ -1702,14 +1702,14 @@ public class WebActivity extends Activity {
      *  🔴 2026-10-28：非学习通原来只问**当前 host 这一个**。那是错的，症状正好
      *    是用户报的「在 App 里登录了智慧门户，别的入口还是要重登」：
      *      - 用户在门户里走完 CAS 登录，最后停在哪一页取决于门户，可能是
-     *        `rhmh.upstream.edu.cn`（门户首页）、也可能是 `xssq` 之类某个应用；
-     *      - 而**身份证 `CASTGC` 在 `sfrz.upstream.edu.cn` 域上**，从来没被问过；
+     *        门户首页、也可能是 `xssq` 之类某个应用；
+     *      - 而**身份证 `CASTGC` 在 CAS 认证站域上**，从来没被问过；
      *      - 于是 java.net 罐子里始终没有 CASTGC ⇒ 主界面判「未登录」⇒
      *        下一个入口打开时没东西可灌 ⇒ 又要登一次。
      *    搬运的方向一直是对的，漏的是「问哪个 host」。
      *
      *  多问两个 host 是安全的：没 cookie 的 host 返回 null，直接跳过。
-     *  ⚠️ 只对学校域名放宽 —— 别把 `wiki.upstream.fan`（百科，独立站）也带进来。
+     *  ⚠️ 只对学校域名放宽 —— 别把百科的独立站域名也带进来。
      */
     private static String[] hostsToAsk(String url) {
         if (isChaoxing(url)) {
@@ -1725,10 +1725,6 @@ public class WebActivity extends Activity {
             host = host.toLowerCase(java.util.Locale.ROOT);
             java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<String>();
             set.add(host);                       // 当前这页自己的
-            if (host.equals("upstream.edu.cn") || host.endsWith(".upstream.edu.cn")) {
-                set.add("sfrz.upstream.edu.cn");      // 身份证（CAS）在这儿
-                set.add("rhmh.upstream.edu.cn");      // 门户首页
-            }
             return set.toArray(new String[0]);
         } catch (Throwable t) {
             return new String[0];
