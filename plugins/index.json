@@ -14,20 +14,6 @@
       "by": "Vesper-a11y",
       "at": "2026-11-28",
       "role": "作者"
-    },
-    {
-      "id": "demo-check",
-      "name": "上架自检",
-      "tag": "测试",
-      "desc": "用来验证自动上架流程的临时插件，验证完会删掉",
-      "ver": "1.0.0",
-      "code": 1,
-      "file": "plugins/demo-check/1.0.0.js",
-      "size": 133,
-      "sha256": "78a2eb064dd35ff92d1b32865b1cfbf70d190e57b84191763a49d14ced02c959",
-      "by": "Vesper",
-      "at": "2026-11-28",
-      "role": ""
     }
   ]
 }
