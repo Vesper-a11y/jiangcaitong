@@ -32,7 +32,7 @@
       }
     ],
     // 🔴 明文 HTTP 放行（2026-11-14 用户报「所有账号都登不上」之后加的）。
-    //    教务是 http://jwglxt.upstream.edu.cn，不是 https。鸿蒙默认只放 https，
+    //    教务是 http 明文（学校没开 443），不是 https。鸿蒙默认只放 https，
     //    而 INTERNET 权限只管「能不能联网」，管不了「能不能走明文」——
     //    两者是两回事，只加权限的请求会被**拦在发出去之前**，报错还看不出原因。
     //    文件在 resources/base/profile/network_config.json。

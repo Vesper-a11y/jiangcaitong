@@ -9,7 +9,7 @@ import { appContext, aesCbc, b64Of, rawDel, rawGet, rawHas,
   sealGet, sealPut, sealState } from './Store';
 
 const TAG: string = 'HYT-Net';
-const BASE: string = 'http://jwglxt.upstream.edu.cn';
+const BASE: string = 'https://jwxt.jxufe.edu.cn';
 const UA: string =
   'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) ' +
   'Chrome/131.0.0.0 Mobile Safari/537.36';
@@ -342,7 +342,7 @@ function applyHeaders(header: Record<string, string>, json: string): void {
  * 🔴🔴 为什么教务这条路要自己走 TCP（2026-11-14 第三次「还是完全不行」之后）：
  *
  *   `https` 的学习通、完美校园都通，只有教务连不上 —— 而教务是**唯一的 http**
- *   （实测 `https://jwglxt.upstream.edu.cn:443` 直接连不上，学校没开 443）。
+ *   （实测学校教务的 https 443 直接连不上，学校没开 443）。
  *   HarmonyOS 默认禁明文，官方说法是配 `network_config.json` + module.json5 里的
  *   metadata。问题在于**meta 的 name 到底叫什么，七种写法都在流传**：
  *     network_security_config / networkSecurityConfig / ohos.network.config /

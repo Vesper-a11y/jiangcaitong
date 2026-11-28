@@ -1,7 +1,7 @@
 /* 酱菜通 · 江财（金智 KINGOSOFT）APK 数据层
    ------------------------------------------------------------------
    与 web/jxufe_eams.py（已端到端实测通过）一一对应。native.js 里的
-   原学校正方逻辑保留作对照；本文件独立暴露 window.JxufeApi，
+   上游学校正方逻辑保留作对照；本文件独立暴露 window.JxufeApi，
    native.js 的 handle() 在江财模式下优先调用这里。
 
    网络通道：复用 Android.req2(id, method, path, body, referer, headersJson)
