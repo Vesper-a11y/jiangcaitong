@@ -18611,20 +18611,11 @@ function renderServices() {
    ================================================================== */
 /* ============== 住理生活（洗澡热水）小组件（2026-11-24 U73）==============
  *
- * 用户原话：「我这个是住理生活软件用的，就是扫二维码付钱，我现在就是要在酱菜通
- * 上面直接记录二维码，随时开关热水，顺便可以的话，记录花费」。
- *
- * 能做到 / 做不到，先说清楚（卡片和弹层里的文案就按这个口径写）：
- *   ✅ 记下设备二维码 —— 扫一次存本机，以后不用再翻住理 App 找「常用设备」；
- *   ✅ 一键打开 —— 二维码里是链接就直接在酱菜通里打开那一页；
- *   ✅ 记账 —— 每次洗完记一笔，自动算本月合计；
- *   ❌ 「点一下就出水」做不到。住理的水表要么走蓝牙（要连设备、握手指令、
- *      拿 isn），要么得用它的登录接口下单 —— 前者本项目没有 BLE 能力，
- *      后者是替用户开水的动作，复现错了就是真金白银的损失。
- *      所以「开关水」这一步仍然落在它自己那一页里点，我们只把入口放到手边。
- *
- * 🔴 存的是二维码**原文**，不是我们编的编号：用户随时能看见、复制、发给同学，
- *    也不怕哪天住理换了编号规则，把我们存的东西变成无法解释的废数据。
+ * 记设备二维码、开关热水、记花费，都收在这一张卡里。
+ * 开关水走蓝牙直连水表：连表 → 握手 → 服务端下单 → 写指令 → 回帧确认。
+ * 🔴 每一步之间的签名指令由服务端生成，手机只负责把 hex 写进表、把回帧交回去。
+ * 🔴 存的是二维码**原文**，不编自己的编号：用户随时能看见、复制；住理哪天换了
+ *    编号规则，我们存的东西也不会变成无法解释的废数据。
  */
 
 /** 记下来的设备（只用本机，不上传）。 */
@@ -18911,8 +18902,9 @@ async function zlWaterStart(d) {
 
     zlProg('⑤ 正在下单…');
     const od = await zlOrderTry(sess, devId, isn);
+    // zlOrderTry 只在拿到 appBytes+orderId 时才返回（否则内部已抛错）——
+    // 这里原来又验一次，是走不到的死分支，删掉免得误导。
     const orderId = String(od.orderId || '');
-    if (!od.appBytes || !orderId) throw new Error('下单后没拿到启动指令');
     zlLiveSet({
       deviceId: devId, isn: isn, orderId: orderId, phase: 'opening',
       at: Math.floor(Date.now() / 1000), devName: name,
@@ -18924,12 +18916,29 @@ async function zlWaterStart(d) {
     await zlNeed('/api/zl/ble/startresp',
       { session: sess, deviceId: devId, orderId: orderId, hex: f3.hex });
 
+    // U95②：服务端确认了回帧 ≠ 水表真的出了水。真机上出现过「提示开水成功、
+    // 但没热水」——不过那是水表端/服务端的状态，代码这边只能核对到设备状态。
+    // 查一次 device.running：认得到就按真实状态说话，认不出就保守提示看一眼。
+    let reallyRunning = null;
+    try {
+      const chk = await zlNeed('/api/zl/device', { session: sess, id: devId });
+      if (chk && chk.device && typeof chk.device.running === 'boolean') {
+        reallyRunning = chk.device.running;
+      }
+    } catch (e) { /* 查不到不挡流程，下面按「看一眼」措辞 */ }
+
     zlLiveSet({
       deviceId: devId, isn: isn, orderId: orderId, phase: 'running',
       at: Math.floor(Date.now() / 1000), devName: name,
     });
-    zlProg('热水已开 · 洗完点同一颗按钮关掉');
-    toast('开水成功');
+    if (reallyRunning === false) {
+      // 设备明说没在供水：不要报「成功」，给用户能做的下一步。
+      zlProg('水表确认没出水 —— 可能余额/设备状态不对，到住理 App 看一眼', true);
+      toast('水表没出水，请到住理 App 确认');
+    } else {
+      zlProg('开水指令已送出 · 请确认水已流出，洗完点同一颗按钮关掉');
+      toast('开水指令已送出');
+    }
     ZL.billsTry = 0;
     zlLoadBills(true);
   } catch (e) {
