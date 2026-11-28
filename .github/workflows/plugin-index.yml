@@ -1,0 +1,66 @@
+name: Plugin index
+
+# 合并即上架：插件只交一个 .js，清单里的 size / sha256 / code / by / at 由这里补。
+#
+# 触发条件是「main 上有 plugins/ 的改动」，也就是插件被合并进来之后。
+# 作者不需要会算 sha256，也不需要手改 JSON —— 合并后这一步自动生成那几行，
+# 市场下一次拉清单就能看到。
+#
+# 为什么不让 PR 阶段直接写回作者的分支：外部 PR 来自 fork，默认令牌推不进去，
+# 要用个人令牌才能推，风险比收益大。放在合并后做，同样省掉作者的手工活。
+#
+# 代码仍然需要维护者在合并前看一遍 —— 插件权限是全开的。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plugin-index
+  cancel-in-progress: false
+
+jobs:
+  index:
+    if: github.repository == 'Vesper-a11y/jiangcaitong'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # 需要历史：提交人取自该文件的最后一次提交
+
+      - name: 补齐清单
+        id: sync
+        run: |
+          set -euo pipefail
+          python3 tools/sync_index.py | tee /tmp/sync.log
+          if git diff --quiet plugins/index.json; then
+            echo "changed=0" >> "$GITHUB_OUTPUT"
+            echo "清单无需改动"
+          else
+            echo "changed=1" >> "$GITHUB_OUTPUT"
+            # 把「新增 / 更新」的插件写进提交正文，提交记录里能一眼看出动了谁
+            { grep -E '^(新增|更新) ' /tmp/sync.log || true; } > /tmp/body.txt
+          fi
+
+      - name: 提交清单
+        if: steps.sync.outputs.changed == '1'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add plugins/index.json
+          {
+            echo "chore(插件): 自动补齐清单条目"
+            echo
+            echo "合并回来的插件由脚本算出字符数与 sha256，写入 plugins/index.json："
+            cat /tmp/body.txt
+          } > /tmp/msg.txt
+          git commit -F /tmp/msg.txt
+          git push

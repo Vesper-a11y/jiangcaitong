@@ -88,9 +88,16 @@ def meta(text, pid):
     }
 
 
+def ver_key(ver):
+    """版本号按数字比大小：1.0.10 要排 1.0.9 后面（按字符串比会反）。"""
+    nums = re.findall(r'\d+', ver or '')
+    return tuple(int(n) for n in nums) or (0,)
+
+
 def scan():
-    """返回 [(id, ver, 相对路径, 文本)]，跳过 _template.js 这类下划线开头的。"""
-    out = []
+    """每个插件只取最新那版：{id: (ver, 相对路径, 文本)}。
+    跳过 _template.js 这类下划线开头的文件；同一个 id 留多份历史版本时按版本号取最大。"""
+    out = {}
     if not os.path.isdir(PLUG):
         return out
     for pid in sorted(os.listdir(PLUG)):
@@ -101,9 +108,11 @@ def scan():
             if not fn.endswith('.js') or fn.startswith('_'):
                 continue
             ver = fn[:-3]
+            if pid in out and ver_key(out[pid][0]) >= ver_key(ver):
+                continue
             rel = 'plugins/%s/%s.js' % (pid, ver)
             with io.open(os.path.join(d, fn), encoding='utf-8', newline='') as f:
-                out.append((pid, ver, rel, f.read()))
+                out[pid] = (ver, rel, f.read())
     return out
 
 
@@ -115,8 +124,9 @@ def main():
     d = load()
     by_id = {p.get('id'): p for p in d['plugins']}
     changed = False
+    files = scan()
 
-    for pid, ver, rel, text in scan():
+    for pid, (ver, rel, text) in files.items():
         size = len(text.encode('utf-16-le')) // 2      # UTF-16 码元数，同 App 的 text.length
         sha = hashlib.sha256(text.encode('utf-8')).hexdigest()
         prev = by_id.get(pid)
@@ -150,10 +160,12 @@ def main():
         by_id[pid] = entry
         changed = True
 
-    missing = [p for p in d['plugins']
-               if p.get('id') not in {pid for pid, _, _, _ in scan()}]
-    for p in missing:
-        print('提示：清单里的 %s 没有对应文件（用 --del 下架，或补回文件）' % p.get('id'))
+    # 文件没了就是下架：清单里对应那一条一起摘掉（历史记录仍在 git 里）。
+    gone = [p.get('id') for p in d['plugins'] if p.get('id') not in files]
+    for pid in gone:
+        print('下架 %s（文件已删除）' % pid)
+        d['plugins'] = [p for p in d['plugins'] if p.get('id') != pid]
+        changed = True
 
     if not changed:
         print('清单已是最新，无需改动')
