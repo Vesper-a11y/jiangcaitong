@@ -21,9 +21,23 @@
 
    CSS 会自动圈在你自己那块里（卡片写 `body{…}` 也只影响自己），外观的 `style`
    是唯一故意不圈的。点击用 `data-act="名字"` 接到 `on` 里同名函数。
-   能调的只有这几个只读接口：`plugin.toast()` / `plugin.data()` / `plugin.week()` /
-   `plugin.total()` / `plugin.today()` / `plugin.back()`。**不能联网、不能改 App 别处**；
-   HTML 里的 `<script>`、`onclick` 这类行内事件会被摘掉。
+
+   插件是**放开的**：`plugin.host` 里是整套宿主 ——
+   路由 `route.go / back / cur / add / remove`（`add` 能注册一整页）、
+   底部导航 `nav.add / remove / setLabel / setIcon`、配置 `cfg.get / set / save`、
+   本机存储 `store`、原生能力 `native`、还有 `win` / `doc` / `$` / `$$`。
+   想加一整页、想在底部多一格、想换配色，都不用改 App 源码。
+   （原来的 `plugin.toast / data / week / total / today / back` 照旧能用。）
+
+   🔴 两条底线，App 里是硬的，不是口头约定：
+   ① **不能删、覆盖 App 本体的源码和安装包** —— 这两样在手机上是只读的，
+      插件也没有任何写文件 / 删文件的入口；
+   ② **卸载时全部复原** —— 插件经 `host` 写过的每个存储键都留了安装前的原值，
+      卸载时逐个还回去；页面、底部导航、塞进界面的东西靠卸载后重载一次清掉。
+      放心改，用户删掉就回原样。
+
+   HTML 里的 `<script>`、`onclick` 这类行内事件会被摘掉（插件自己有代码入口，
+   不必借 HTML 再插一段）。
    不写 `html` / `page` 的老写法（`stats` / `state` / `action`，由 App 画）也还支持。
    这些样子都在 `plugins/_template.js` 里，照抄改改就能用。
 3. 同时在 `plugins/index.json` 里加一行：`id` / `name` / `tag` / `desc` / `ver` / `code` /

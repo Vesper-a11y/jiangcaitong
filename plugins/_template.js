@@ -1,41 +1,72 @@
 /* 酱菜通插件模板 —— 复制这个文件，改掉里面的字就是一个插件。
  *
- * 插件能干三件事，想用哪个用哪个，也可以一起用：
+ * 插件能干的事（想用哪个用哪个，也可以一起用）：
  *
  *   ① 在生活页画一张卡      html / css        （写函数就每次重画都重新求值）
  *   ② 有自己的整页界面      page{ html, css, on, title, refresh }
  *   ③ 改 App 的外观         style             （全局 CSS，卸载自动还原）
+ *   ④ 调宿主：路由、页面、底部导航、配置、原生   plugin.host
  *
- * 底下是「①②一起用」的例子。只想要外观就从 ③ 那段抄。
+ * 🔴 插件是放开的，不是只有 ①②③：`plugin.host` 里是整套宿主，随便调。
+ *    插件代码本身就跑在宿主作用域里，switchTab('me')、store.get(...)、CFG 这些
+ *    全局的东西直接写也能用（plugin.host 只是给你个整齐的入口）。
  *
- * 能用的接口（都是只读的，改了也不会影响 App 别处）：
- *   plugin.toast(文字)      弹一句提示
- *   plugin.data(键, 值)     存 / 读自己的数据（只写一个参数就是读）
- *   plugin.week()           现在是第几周
- *   plugin.total()          这学期一共几周
- *   plugin.today()          今天 { m, d, w, text }，text 形如「11月28日 周六」
- *   plugin.back()           从自己那一页返回生活页
+ *    plugin.host.route.go('me')            切到某一页（'schedule' 'exams' 'campus' 'me' …）
+ *    plugin.host.route.back()              从插件页返回
+ *    plugin.host.route.cur()               现在是哪一页
+ *    plugin.host.route.add({name,title,html,css,back})
+ *                                          注册一整页：切过去就能看到，左上角自带返回
+ *    plugin.host.route.remove(name)        撤掉这一页
+ *    plugin.host.route.list()              App 现在有哪些页面
+ *
+ *    plugin.host.nav.add({tab,label,icon,before})
+ *                                          底部加一格（tab 要和你注册的页面同名，点了才切过去）
+ *    plugin.host.nav.remove(tab)           去掉一格
+ *    plugin.host.nav.setLabel(tab,文字)     改某一格的字
+ *    plugin.host.nav.setIcon(tab,svg)      换某一格的图标
+ *    plugin.host.nav.list()                底部现在有哪几格
+ *
+ *    plugin.host.cfg.all()                 整份设置（对象，直接改）
+ *    plugin.host.cfg.get(k) / set(k,v)     读 / 改一项
+ *    plugin.host.cfg.save()                改完调这个才落盘
+ *
+ *    plugin.host.store.get / set / del     本机存储（可以存任意键）
+ *    plugin.host.store.keys()              本机都存了些什么
+ *
+ *    plugin.host.native.*                  原生能力（下载、日历、蓝牙、通知……）
+ *    plugin.host.android.*                 原生桥接本体
+ *    plugin.host.win / doc / $ / $$        浏览器那一套
+ *    plugin.host.toast(文字)               弹一句
+ *
+ *    还有原来那几个顺手的小接口：
+ *    plugin.data(键, 值)   存 / 读自己的数据（只写一个参数就是读）
+ *    plugin.week()         现在是第几周
+ *    plugin.total()        这学期一共几周
+ *    plugin.today()        今天 { m, d, w, text }
+ *    plugin.back()         从自己那一页返回生活页
+ *
+ * 🔴 两条底线（写插件的人要心里有数）：
+ *    1. 不能删、不能覆盖 App 本体的源码和安装包。这两样在手机上是只读的，
+ *       你也没有任何写文件/删文件的入口 —— 想干也干不了，别在这上面花时间。
+ *    2. 卸载插件时，它带来的所有改动都会被清干净：你经 host 写的每个存储键
+ *       App 都记着安装前的原值，卸载时逐个还回去；页面、导航、塞进界面的东西
+ *       都靠卸载后重载一次清掉。所以放心改，用户删掉就回原样。
  *
  * 交互怎么写：HTML 里给元素写 data-act="名字"，再在 on 里放同名函数。
- * 点完 App 会自动重画一次 —— 在 on 里改完 plugin.data，界面自己就更新了，
- * 不用自己去刷。
+ * 点完 App 会自动重画一次 —— 在 on 里改完 plugin.data，界面自己就更新了。
  *
  * 样式怎么写：
- *   · 卡片和页面的 css 会自动加前缀，写 body{…} 只影响你自己，写 .x 只有你认；
- *     @media 里照样生效。想贴边就把 css 写成 .plgv{padding:0} / .plgpg{padding:0}。
+ *   · 卡片和 page 的 css 会自动加前缀，写 body{…} 只影响你自己；
+ *     @media 里照样生效。想贴边就写 .plgv{padding:0} / .plgpg{padding:0}。
  *   · 想跟 App 配色一致就用这些变量（浅色深色自动切）：
  *       var(--text) 正文   var(--sub) 次要字   var(--line) 分隔线
  *       var(--card) 卡面   var(--accent) 主色  var(--accent-soft) 主色淡底
- *   · 也能直接用 App 现成的类：class="btn primary block"（整行主按钮）、
- *     class="card"、class="row"…… 长得就和 App 自己的一模一样。
- *   · 外观插件的 style **不做**作用域（要改就改整页），写好之后自己先看一眼。
- *
- * HTML 里不能带 <script>、onclick 这类行内事件（会被摘掉）。
- * 不联网。要联网取数据的话，先提需求，App 里加好再给你用。
+ *   · 也能直接用 App 现成的类：class="btn primary block"、class="card"、class="row"。
+ *   · style（外观插件）**不做**作用域 —— 要换肤就得改整页，写好自己先看一眼。
  *
  * 写好后在 App 里点「插件市场 → 我也做一个」，会打开 GitHub 新建文件页：
  * 贴进去、路径写成 plugins/<id>/<版本>.js，提交就是一个 PR。
- * 我看过之后合进去（同时补 index.json 那一行，写上 by / at）就上架了。
+ * 我看过之后合进去（同时补 index.json 那一行）就上架了。
  */
 plugin({
   name: '空教室',
@@ -95,3 +126,24 @@ plugin({
    * ].join('\n')
    */
 });
+
+/* ④ 要自己的整页、要底部多一格 —— 放在 plugin({...}) 外面写（取消注释就能跑）：
+ *
+ * // 注册一整页：切过去就能看到，左上角自带返回，返回去哪由 back 定
+ * plugin.host.route.add({
+ *   name: 'ecroom',
+ *   title: '空教室',
+ *   html: '<p class="ec-h">今天 A101、B203 空着</p>',
+ *   css: '.ec-h{font-size:15px;color:var(--text)}',
+ *   back: 'campus'
+ * });
+ *
+ * // 底部加一格，点了切到那一页（tab 必须和上面注册的 name 一样）
+ * plugin.host.nav.add({ tab: 'ecroom', label: '空教室', before: 'me' });
+ *
+ * // 改一项设置，记得 save 才落盘
+ * plugin.host.cfg.set('ecOn', true);
+ * plugin.host.cfg.save();
+ *
+ * // 插件卸载时这些都会被清掉（存储键还原、页面和导航随重载消失），不用自己收尾。
+ */
