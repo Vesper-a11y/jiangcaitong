@@ -41,6 +41,11 @@ jobs:
       - name: Tests
         run: npm test
 
+      - name: 插件清单预览（只读）
+        # 作者只交 .js，清单由合并后的 Plugin index 工作流补齐；
+        # 这里先算一遍给他看：卡片会用哪个名字、字符数和 sha256 是多少。
+        run: python3 tools/sync_index.py --dry-run || true
+
       - name: Privacy scan
         run: |
           set -e

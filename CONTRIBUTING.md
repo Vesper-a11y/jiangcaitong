@@ -40,13 +40,23 @@
    不必借 HTML 再插一段）。
    不写 `html` / `page` 的老写法（`stats` / `state` / `action`，由 App 画）也还支持。
    这些样子都在 `plugins/_template.js` 里，照抄改改就能用。
-3. 同时在 `plugins/index.json` 里加一行：`id` / `name` / `tag` / `desc` / `ver` / `code` /
-   `file` / `size` / `sha256` / `by`（你的 GitHub 帐号）/ `at`（日期）/ `role`（头衔，
-   例如 `贡献者`；仓库主自己的插件写 `作者`）。
-   `size` 和 `sha256` 必须和文件对得上，否则装不上；不会算就跑
-   `python tools/add_plugin.py <文件> --id … --name … --ver … --by <你的帐号>`。
-4. `code` 是整数、每次升级 +1（App 靠它比新旧，`1.0.10` 和 `1.0.9` 才不会比反）。
-5. 合并进 `main` 就等于上架。**维护者会先看一遍再合** —— 这个仓库里有 App 全部源码，
+3. 文件开头写上这几行注释，市场卡片就用它们（不写也能上架，名字退回用目录名、
+   标签写「插件」）：
+
+   ```js
+   /* @name 空教室
+    * @tag 教室
+    * @desc 今天哪几间空着，点一下记住 */
+   ```
+
+4. **不用自己写 `plugins/index.json`**。合并进 `main` 之后，仓库用
+   `tools/sync_index.py` 算出字符数和 sha256，把
+   `id / name / tag / desc / ver / code / file / size / sha256 / by / at`
+   一起写进清单。清单里的数必须和文件对得上，否则 App 不装 —— 这一步就是替你算，
+   所以别手改清单，手写的也会被脚本覆盖。
+5. 版本号就是文件名：`plugins/<id>/1.0.0.js`。改了内容要换新版本号（新文件名），
+   旧的可以留着。`code` 由脚本在内容变化时自动 +1，App 靠它比新旧。
+6. 合并进 `main` 就等于上架。**维护者会先看一遍再合** —— 这个仓库里有 App 全部源码，
    一个 PR 能改的不只是插件。
 
 ## 提 PR
