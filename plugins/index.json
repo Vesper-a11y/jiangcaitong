@@ -10,7 +10,10 @@
       "code": 1,
       "file": "plugins/week-progress/1.0.0.js",
       "size": 497,
-      "sha256": "58fa7de8c2e6e10aff271a6f826874fac3163267d133b3724942cf205d4afbf0"
+      "sha256": "58fa7de8c2e6e10aff271a6f826874fac3163267d133b3724942cf205d4afbf0",
+      "by": "Vesper-a11y",
+      "at": "2026-11-28",
+      "role": "作者"
     }
   ]
 }

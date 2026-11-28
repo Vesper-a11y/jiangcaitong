@@ -8,6 +8,33 @@
 - 🔴 **不要贴真实姓名、学号、一卡通号、宿舍号、成绩截图**。要贴就打码，或换成示例值（学号用 `2202500000`）。
 - 登录 related 问题说明是扫码登录还是 Cookie 失效，不必给账号密码。
 
+## 交插件（不用改 App 源码）
+
+插件就是一段 `plugins/<id>/<版本>.js`，App 从本仓库下载后当代码跑，所以规矩比普通 PR 更硬：
+
+1. 在 App 里点「插件市场 → 我也做一个」，会直接打开本仓库 `plugins/` 的新建文件页；
+   也可以手动在 GitHub 上新建 `plugins/<id>/<版本>.js`。提交时 GitHub 会自动开 PR。
+2. 插件能干三件事，用哪个都行，也可以一起用：
+   - **生活页画一张卡**：`html`（字符串或函数）+ `css`；
+   - **有自己的整页界面**：`page: { title, html, css, on }` —— 点卡片进去就是它自己的页面；
+   - **改 App 外观**：`style`（全局 CSS，卸载自动还原）。
+
+   CSS 会自动圈在你自己那块里（卡片写 `body{…}` 也只影响自己），外观的 `style`
+   是唯一故意不圈的。点击用 `data-act="名字"` 接到 `on` 里同名函数。
+   能调的只有这几个只读接口：`plugin.toast()` / `plugin.data()` / `plugin.week()` /
+   `plugin.total()` / `plugin.today()` / `plugin.back()`。**不能联网、不能改 App 别处**；
+   HTML 里的 `<script>`、`onclick` 这类行内事件会被摘掉。
+   不写 `html` / `page` 的老写法（`stats` / `state` / `action`，由 App 画）也还支持。
+   这些样子都在 `plugins/_template.js` 里，照抄改改就能用。
+3. 同时在 `plugins/index.json` 里加一行：`id` / `name` / `tag` / `desc` / `ver` / `code` /
+   `file` / `size` / `sha256` / `by`（你的 GitHub 帐号）/ `at`（日期）/ `role`（头衔，
+   例如 `贡献者`；仓库主自己的插件写 `作者`）。
+   `size` 和 `sha256` 必须和文件对得上，否则装不上；不会算就跑
+   `python tools/add_plugin.py <文件> --id … --name … --ver … --by <你的帐号>`。
+4. `code` 是整数、每次升级 +1（App 靠它比新旧，`1.0.10` 和 `1.0.9` 才不会比反）。
+5. 合并进 `main` 就等于上架。**维护者会先看一遍再合** —— 这个仓库里有 App 全部源码，
+   一个 PR 能改的不只是插件。
+
 ## 提 PR
 
 ### 先说清楚红线

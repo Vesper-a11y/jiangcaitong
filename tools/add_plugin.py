@@ -16,6 +16,7 @@
 🔴 code 用整数、每次 +1：App 靠它比新旧（1.0.10 和 1.0.9 才不会比反）。
 """
 import argparse
+import datetime
 import hashlib
 import io
 import json
@@ -53,6 +54,9 @@ def main():
     ap.add_argument("--desc")
     ap.add_argument("--ver")
     ap.add_argument("--code", type=int)
+    ap.add_argument("--by", help="提交人（GitHub 帐号，不带 @）")
+    ap.add_argument("--at", help="提交日期 YYYY-MM-DD，默认今天")
+    ap.add_argument("--role", help="头衔：作者 / 维护者 / 贡献者（作者默认不填也行）")
     ap.add_argument("--del", dest="drop", help="下架这个 id")
     a = ap.parse_args()
 
@@ -85,6 +89,12 @@ def main():
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copyfile(a.file, dst)
 
+    # U119：市场卡片上要显示「谁提交的、哪天」。by 不传时沿用这一条原来的，
+    # 新插件默认记成仓库主；at 永远是**这一版的**提交日期（更新会往前推）。
+    prev = [p for p in d["plugins"] if p.get("id") == a.id]
+    by = (a.by or (prev[0].get("by") if prev else "") or "Vesper-a11y").lstrip("@")
+    at = a.at or datetime.date.today().isoformat()
+
     entry = {
         "id": a.id,
         "name": a.name[:20],
@@ -95,6 +105,9 @@ def main():
         "file": rel,
         "size": size,
         "sha256": sha,
+        "by": by,
+        "at": at,
+        "role": (a.role or (prev[0].get("role") if prev else "") or "作者"),
     }
     d["plugins"] = [p for p in d["plugins"] if p.get("id") != a.id] + [entry]
     save(d)
