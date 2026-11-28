@@ -329,6 +329,9 @@ body::after {
 }
 
 #app {
+  /* U95③：先给老 WebView 认的 vh，新内核再用 dvh 覆盖。
+     原生全屏 WebView 没有浏览器地址栏，两者在这台 App 里几乎等价。 */
+  height: 100vh;
   height: 100dvh;
   display: flex; flex-direction: column;
   max-width: 560px; margin: 0 auto;
@@ -4565,7 +4568,17 @@ body::after {
    ⚠️ 这个变量同时被 #wkGutter 和网格用（`var(--cell-h, 56px)` 两处），
       写在这里两边一起生效，别再单独写死某一个。
    ================================================================ */
-:root { --cell-h: clamp(46px, calc((100dvh - 268px) / 12), 54px); }
+/* 🔴 U95③（2026-11-28）：荣耀 MagicOS 7.0 / Android 13 的 WebView 内核偏老，
+   不认 dvh 也不认 clamp() 里套 calc() —— 原来这一行整个失效，--cell-h 变成
+   「定义了但没值」，grid-template-rows 的 var(--cell-h, 56px) 回退也救不了
+   （变量存在但值无效时 fallback 不生效），行高塌成 0，卡片全挤在顶部一行。
+   修法：先给一条**老 WebView 也认**的静态值（纯 vh + 固定 clamp 肉眼看不出的
+   那几像素），再用 @supports 让新内核覆盖成 dvh 精确版。老内核不会解析
+   @supports 里那句，就一直用上面的静态值 —— 课表照样铺满，只是差几像素。 */
+:root { --cell-h: 50px; }
+@supports (height: 100dvh) {
+  :root { --cell-h: clamp(46px, calc((100dvh - 268px) / 12), 54px); }
+}
 
 /* 格子矮了，色块里的字也要跟着收一点：课名 13→12、教室/老师 10→9，
    内边距 5→3。 otherwise 单节格里「课名两行 + 教室」会把教室挤出裁切区。 */
@@ -4668,6 +4681,39 @@ body::after {
 /* 关于弹层：内容本来就少，把壳子的上下留白收一收，别撑成半屏。 */
 .about-sheet .sh-title { margin-bottom: 8px; }
 .about-sheet { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+
+/* ===== 更新日志独立弹层（2026-11-28）=====
+   从「关于」里拆出来：大标题「版本号 + 日期」，分类小标题，大字号全宽条目。
+   数据是内置的，测试版也看得到。全部走主题变量，换主题跟着变。 */
+.log-sheet { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+.log-sheet .sh-title { margin-bottom: 14px; }
+.log-wrap { max-height: 66vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.log-ver-block { padding: 4px 0 18px; }
+.log-ver-block + .log-ver-block {
+  border-top: 1px solid var(--line); padding-top: 18px;
+}
+.log-ver {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 24px; font-weight: 700; line-height: 1.2; color: var(--text);
+}
+.log-latest .log-ver { color: var(--accent); }
+.log-tag {
+  font-size: 11px; font-weight: 500; line-height: 1;
+  padding: 4px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+}
+.log-date { margin: 5px 0 14px; font-size: 13px; color: var(--sub); }
+.log-gt {
+  margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: var(--sub);
+}
+.log-li {
+  position: relative; padding: 6px 0 6px 16px;
+  font-size: 16px; line-height: 1.6; color: var(--text);
+}
+.log-li::before {
+  content: ''; position: absolute; left: 2px; top: 15px;
+  width: 5px; height: 5px; border-radius: 50%; background: var(--line-strong);
+}
 /* 「我的」页底部「关于」：单独一张卡一行（2026-11-25，用户：「单独作为一行」）。
    不要图标，就是一行「关于 + 右箭头」；行高沿用 .row 的 44px，不多占。 */
 .about-single { padding: 0; }
@@ -5697,46 +5743,8 @@ body::after {
 .jf-g[data-k="net"] .jf-rec-t { background: rgba(110, 193, 245, .16); color: #2e7ca8; }
 /* 组内记录行不再重复「电费/网费」标签 —— 组头已经说明白是哪边的。 */
 .jf-g .jf-rec { background: var(--fill); }
-/* 取件码：一行一条，码用等宽大字，像面单上印出来的那一串。 */
-.jump-codes { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
-.jump-codes[hidden] { display: none; }
-.jump-code {
-  display: flex; align-items: center; gap: 8px;
-  padding: 9px 11px; border-radius: 12px;
-  background: rgba(123, 140, 255, .07);
-}
-.jump-code b {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 17px; font-weight: 700; letter-spacing: .5px; color: var(--text);
-}
-.jump-code i {
-  font-style: normal; min-width: 0; flex: 1 1 auto;
-  font-size: 11.5px; color: var(--sub);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.jump-code em {
-  font-style: normal; flex: 0 0 auto; font-size: 11px; color: #7b8cff;
-}
-/* 没给「通知使用权」时的入口：也是虚线，和取件码那一块同一个语言。 */
-.jump-perm {
-  display: block; width: 100%; margin-top: 12px; padding: 11px 13px;
-  border: 1px dashed rgba(123, 140, 255, .55); border-radius: 12px;
-  background: rgba(123, 140, 255, .06); color: #4f5bd5;
-  font-family: inherit; font-size: 12.5px; text-align: left;
-}
-.jump-perm:active { opacity: .7; }
-
-/* 弹层里按 App 分组（U79）：一个浅紫框装一家的件，组标题右边是「打开」。 */
-.jump-groups { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
-.jump-group { border-radius: 14px; background: rgba(123, 140, 255, .06); padding: 10px 10px 5px; }
-.jg-hd { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
-.jg-hd b { font-size: 13px; font-weight: 650; color: var(--text); }
-.jg-hd span { font-size: 11px; color: var(--sub); }
-.jg-go {
-  margin-left: auto; border: 0; padding: 2px 0; background: transparent;
-  color: #5a63c9; font-family: inherit; font-size: 12px;
-}
-.jump-group .jump-code { background: transparent; padding: 6px 2px; }
+/* 2026-11-28：快递「通知自动读取取件码」整套移除，相关样式已删除。
+   快递取件 App 的快捷跳转入口保留。 */
 
 @media (prefers-color-scheme: dark) {
   /* U88 暗色底纹复核：深底上亮色描边 18% 会显得抢眼，压到 .12 档 ——
@@ -5768,9 +5776,6 @@ body::after {
   .jf-g[data-k="elec"] .jf-gdot { background: #ffab52; }
   .jf-g[data-k="net"]  .jf-gdot { background: #8fd0f8; }
   .jf-g[data-k="net"] .jf-rec-t { color: #7cc4f5; }
-  .jump-code { background: rgba(123, 140, 255, .14); }
-  .jump-group { background: rgba(123, 140, 255, .10); }
-  .jg-go { color: #a3adff; }
 }
 
 /* ===== 长按换位（2026-11-24 U75）=====================================
@@ -6210,7 +6215,11 @@ body.life-sorting .lifew.swapping {
    🔴 `--cell-h` 同时被课表和左边节次栏用（两者必须一模一样，否则时间会错位），
       所以设在 `#app` 上让两边一起继承，别只写在 .grid 上。 */
 @media (min-width: 600px) and (min-height: 700px) {
-  #app { --cell-h: clamp(56px, calc((100dvh - 210px) / 11), 104px); }
+  /* U95③：老 WebView 不认 dvh → 先给静态兜底，再在 @supports 里覆盖（同 :root）。 */
+  #app { --cell-h: 68px; }
+  @supports (height: 100dvh) {
+    #app { --cell-h: clamp(56px, calc((100dvh - 210px) / 11), 104px); }
+  }
 }
 
 /* ---------------- 权限自检页（2026-11-15） ----------------
@@ -6254,3 +6263,127 @@ body.life-sorting .lifew.swapping {
   -webkit-tap-highlight-color: transparent;
 }
 .perm-go:active { background: var(--active); }
+
+/* ===== AI 学习助手（U95⑦，2026-11-28）=====
+   独立全屏弹层：顶栏 + 隐私提示 + 消息列表 + 底部输入。风格跟其它弹层一致，
+   全部走主题变量，不写死深浅色。只在用户主动点课表顶栏入口时出现。 */
+/* 2026-11-28：用户要 AI 按钮「跟旁边两个（今天 / 周）类似，要有那个圆圈」——
+   照 .wk-btn.wk-view 的玻璃糖胶囊做：34px 高、999px 圆角、白底淡边淡影。
+   图标仍是 20px 四角星，用 --text 跟视图按钮一致。 */
+.wk-btn.wk-ai {
+  width: 34px; height: 34px; color: var(--text); background: var(--card);
+  border: .5px solid rgba(23, 54, 102, .08);
+  border-radius: 999px;
+  box-shadow: 0 1px 2px rgba(23, 54, 102, .05);
+}
+.wk-btn.wk-ai:active { background: var(--line); }
+.wk-ai svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ai-root { position: fixed; inset: 0; z-index: 1200; }
+.ai-root[hidden] { display: none; }
+.ai-mask { position: absolute; inset: 0; background: rgba(0,0,0,.32); }
+.ai-sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; top: 8vh;
+  max-width: 560px; margin: 0 auto;
+  display: flex; flex-direction: column;
+  background: var(--bg); border-radius: 18px 18px 0 0;
+  box-shadow: 0 -8px 30px rgba(0,0,0,.16);
+  overflow: hidden;
+}
+.ai-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; border-bottom: 1px solid var(--line);
+}
+.ai-title { flex: 1; text-align: center; font-size: 16px; font-weight: 600; color: var(--text); }
+.ai-x, .ai-setbtn, .ai-set-head-sp {
+  flex: 0 0 auto; min-width: 40px; min-height: 32px;
+  border: 0; background: none; font: inherit; font-size: 13px; color: var(--sub);
+}
+.ai-x { font-size: 18px; }
+.ai-setbtn { text-align: right; }
+/* 2026-11-28：设置页独立后，头部按钮不再共用 .ai-set —— 那个类名此前
+   带着 position:absolute;inset:0;z-index:3，把按钮撑成全屏透明层，导致
+   「设置」显示在弹层正中、点输入框误触。现在 .ai-set 已彻底移除。 */
+.ai-privacy {
+  padding: 8px 14px; font-size: 11px; line-height: 1.5; color: var(--sub);
+  background: var(--card); border-bottom: 1px solid var(--line);
+}
+.ai-msgs { flex: 1 1 auto; overflow-y: auto; padding: 14px; -webkit-overflow-scrolling: touch; }
+.ai-empty { text-align: center; color: var(--sub); font-size: 13px; line-height: 1.8; padding-top: 40px; }
+.ai-bub {
+  max-width: 86%; margin-bottom: 12px; padding: 9px 12px;
+  border-radius: 12px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+}
+.ai-me { margin-left: auto; background: var(--accent); color: var(--primary-ink); border-bottom-right-radius: 3px; }
+.ai-bot { background: var(--card); color: var(--text); border: 1px solid var(--line); border-bottom-left-radius: 3px; }
+.ai-typing { opacity: .6; }
+.ai-input {
+  display: flex; gap: 8px; align-items: center;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line); background: var(--card);
+}
+.ai-input input {
+  flex: 1; min-width: 0; height: 38px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 19px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 14px;
+}
+.ai-send {
+  flex: 0 0 auto; height: 38px; padding: 0 16px; border: 0; border-radius: 19px;
+  background: var(--accent); color: var(--primary-ink); font: inherit; font-size: 14px; font-weight: 600;
+}
+.ai-send:active { opacity: .8; }
+/* AI 高危确认条（嵌在弹层内，不用 sheetMask —— 那层会被 AI 全屏弹层盖住）。 */
+.ai-confirm {
+  margin: 0 14px 10px; padding: 10px 12px; border-radius: 10px;
+  background: var(--card); border: 1px solid var(--line);
+}
+.ai-confirm[hidden] { display: none; }
+.ai-confirm-t { font-size: 13px; line-height: 1.5; color: var(--text); margin-bottom: 8px; }
+.ai-confirm-b { display: flex; gap: 8px; }
+.ai-confirm-b button {
+  flex: 1; height: 34px; border: 0; border-radius: 8px;
+  font: inherit; font-size: 13px; font-weight: 600;
+}
+.ai-confirm-b #aiConfNo { background: var(--accent-soft); color: var(--sub); }
+.ai-confirm-b #aiConfYes { background: var(--accent); color: var(--primary-ink); }
+
+/* AI 设置独立页（2026-11-28）：跟对话弹层平级的一整屏，z-index 更高，
+   不再叠在对话框上。不再用系统 prompt，避免 WebView 带出本地网址。 */
+.ai-settings-root { z-index: 1300; }
+.ai-set-sheet { top: 6vh; }
+.ai-set-body {
+  flex: 1 1 auto; overflow-y: auto; padding: 16px 18px calc(20px + env(safe-area-inset-bottom));
+  -webkit-overflow-scrolling: touch;
+}
+.ai-set-note { font-size: 12px; line-height: 1.6; color: var(--sub); margin: 0 0 16px; }
+.ai-set-inline {
+  border: 0; padding: 0; background: none; color: var(--accent);
+  font: inherit; font-size: inherit; text-decoration: underline;
+}
+.ai-set-fld { margin-bottom: 12px; }
+.ai-set-lb { font-size: 12px; color: var(--text); margin-bottom: 5px; }
+.ai-set-hint { color: var(--sub); font-size: 11px; }
+.ai-set-ro {
+  width: 100%; min-height: 40px; padding: 10px 12px; box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+  color: var(--text); font: inherit; font-size: 13px; text-align: left; word-break: break-all;
+}
+.ai-set-url { color: var(--sub); }
+.ai-set-input {
+  width: 100%; height: 40px; padding: 0 12px; box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--card); color: var(--text); font: inherit; font-size: 14px;
+}
+.ai-set-btns { display: flex; gap: 10px; margin-top: 14px; }
+.ai-set-btns button {
+  flex: 1; height: 40px; border: 0; border-radius: 10px;
+  background: var(--accent-soft); color: var(--sub); font: inherit; font-size: 14px;
+}
+.ai-set-btns button.on { background: var(--accent); color: var(--primary-ink); font-weight: 600; }
+/* 模型二选一：V4.1 Flash（默认）/ 旧版。选中态用主题色描边，跟其它选中控件一致。 */
+.ai-model-pick { display: flex; flex-direction: column; gap: 8px; }
+.ai-model-opt {
+  width: 100%; min-height: 40px; padding: 8px 12px; box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+  color: var(--text); font: inherit; font-size: 13px; text-align: left;
+}
+.ai-model-opt.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }

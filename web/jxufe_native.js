@@ -915,22 +915,36 @@ for(var j=0;j<4;j++){if(i*8+j*6>binarray.length*32)str+=b64pad;else str+=tab.cha
   }
 
   // ------------------------------------------------------------------ HTML 表格
-  function cellText(td) {
+  function cellText(td, splitBlocks) {
     var c = td.cloneNode(true);
     var brs = c.querySelectorAll('br');
     for (var i = 0; i < brs.length; i++) {
       brs[i].parentNode.replaceChild(document.createTextNode('\n'), brs[i]);
     }
+    // 🔴 U97（2026-11-28）：教务把同一格里的多段上课信息放进多个 <div>。
+    //    textContent 会把相邻 <div> 的内容**直接粘在一起**（如「…S304(麦庐园
+    //    校区)计算社会科学」），块与块之间没有换行，课名就被吞进教室行里。
+    //    课表解析时给每个块级元素前后补一个换行，下面的 courseFromCell 才能
+    //    按行切干净。成绩 / 考试那些表不传这个开关，保持原来的单行文本。
+    if (splitBlocks) {
+      var blocks = c.querySelectorAll('div, p, table');
+      for (var j = 0; j < blocks.length; j++) {
+        var b = blocks[j];
+        if (!b.parentNode) continue;
+        b.parentNode.insertBefore(document.createTextNode('\n'), b);
+        b.parentNode.insertBefore(document.createTextNode('\n'), b.nextSibling);
+      }
+    }
     return (c.textContent || '').replace(/[ \t\r\f\v\u00a0]+/g, ' ').trim();
   }
-  function tablesOf(html) {
+  function tablesOf(html, splitBlocks) {
     var doc = new DOMParser().parseFromString(html, 'text/html');
     var ts = doc.querySelectorAll('table'), out = [];
     for (var i = 0; i < ts.length; i++) {
       var rows = [], rs = ts[i].rows;
       for (var r = 0; r < rs.length; r++) {
         var cells = [];
-        for (var c = 0; c < rs[r].cells.length; c++) cells.push(cellText(rs[r].cells[c]));
+        for (var c = 0; c < rs[r].cells.length; c++) cells.push(cellText(rs[r].cells[c], splitBlocks));
         rows.push(cells);
       }
       out.push(rows);
@@ -1115,7 +1129,16 @@ for(var j=0;j<4;j++){if(i*8+j*6>binarray.length*32)str+=b64pad;else str+=tab.cha
   // ------------------------------------------------------------------ 课表
   var ROW_BASE_PERIOD = { '一': 1, '二': 3, '三': 6, '四': 8, '五': 10 };
   var ROOM_RE = /^(.*?)\s*[（(]\s*([^（）()]*校区)\s*[）)]\s*$/;
-  var WEEK_PERIOD_RE = /(\d{1,2})\s*(?:-\s*(\d{1,2}))?\s*(单|双)?\s*\[\s*(\d{1,2})\s*-\s*(\d{1,2})\s*\]/;
+  // 🔴 U95④（2026-11-28）：原正则是
+  //     /(\d{1,2})\s*(?:-\s*(\d{1,2}))?\s*(单|双)?\s*\[\s*(\d{1,2})\s*-\s*(\d{1,2})\s*\]/
+  //     要求「数字-数字[节-节]」中间不能夹任何字。可教务那边同一套课表里，
+  //     有的老师把周次写成「2-9周[3-4]」「第2-9周[3-4]」（样本 xskcb 里确实有
+  //     「2-9周 []」这种带「周」字的写法），正则匹配不上 → weekText 空 →
+  //     periods 退化成 [rowBase]、weeks 空 → 这门课整门漏掉。
+  //     用户反馈的正是这个：周五 3-4 节「计算社会科学」前 9 周有、第 10 周起没了。
+  //     放宽点：允许「第」「周」字、允许单双前后有空格、允许节次用 ~ 或 , 分隔。
+  //     五组捕获保持不变（①起周 ②止周 ③单/双 ④起节 ⑤止节），下面代码不用改。
+  var WEEK_PERIOD_RE = /第?\s*(\d{1,2})\s*(?:[-~至]\s*(\d{1,2}))?\s*周?\s*(单|双)?\s*周?\s*[\[【]\s*(\d{1,2})\s*[-~至]\s*(\d{1,2})\s*[\]】]/;
   var ROOM_KW = /校区|教学楼|教室|大楼|[楼主][\dA-Z]|场[CT\d]|馆|实训/;
 
   function courseFromCell(cell, rowBase) {
@@ -1135,7 +1158,12 @@ for(var j=0;j<4;j++){if(i*8+j*6>binarray.length*32)str+=b64pad;else str+=tab.cha
       var ln = lines[i];
       var wm = WEEK_PERIOD_RE.exec(ln);
       if (wm) {
-        weekText = ln;
+        // 🔴 U97（2026-11-28）：同一格里可能有**好几行**周次 —— 同一门课分
+        //    两段周上课，或两段周对应不同节次。原来每遇到一行就把 weeks /
+        //    periods 清空重算，最后只剩最后一段，前面的全丢（症状正是
+        //    「前 9 周有、第 10 周起没了」）。改成**累加去重**，每一行认出来
+        //    的周次、节次都算数。
+        weekText = weekText ? weekText + '\n' + ln : ln;
         var w0 = parseInt(wm[1], 10), w1 = wm[2] ? parseInt(wm[2], 10) : w0;
         if (w1 < w0) { var tmp = w0; w0 = w1; w1 = tmp; }
         // 🔴 组号别数错：这条正则的五个括号依次是
@@ -1147,15 +1175,32 @@ for(var j=0;j<4;j++){if(i*8+j*6>binarray.length*32)str+=b64pad;else str+=tab.cha
         var p0 = parseInt(wm[4], 10), p1 = parseInt(wm[5], 10);
         if (!(p0 > 0)) { p0 = rowBase; p1 = rowBase; }
         if (!(p1 >= p0)) p1 = p0;
-        parity = wm[3] || '';
-        weeks = [];
-        for (var w = w0; w <= w1; w++) {
-          if (parity === '单' && w % 2 === 0) continue;
-          if (parity === '双' && w % 2 === 1) continue;
-          weeks.push(w);
+        // 单 / 双只约束**这一行**认出的周次，别把没标注的其它行一起过滤掉。
+        var lineParity = wm[3] || '';
+        if (lineParity) parity = lineParity;
+        // 🔴 U95④：周次可能是**逗号分隔的多段**（如「1-9,11-17周[3-4]」），
+        //    WEEK_PERIOD_RE 只会抓到一段，另一段整段丢。这里在这一行里再扫
+        //    一遍，把所有「数字」「数字-数字」段都收进来。
+        var segs = [], segRe = /(\d{1,2})\s*(?:[-~至]\s*(\d{1,2}))?/g, sm;
+        // 只在「[ / 【」之前的那段周次描述里扫，别把节次「3-4」也当成周次。
+        var weekPart = ln.split(/[\[【]/)[0];
+        while ((sm = segRe.exec(weekPart)) !== null) {
+          var a = parseInt(sm[1], 10), b = sm[2] ? parseInt(sm[2], 10) : a;
+          if (a < 1 || a > 30 || b < 1 || b > 30) continue;
+          if (b < a) { var t2 = a; a = b; b = t2; }
+          segs.push([a, b]);
         }
-        periods = [];
-        for (var p = p0; p <= p1; p++) periods.push(p);
+        if (!segs.length) segs.push([w0, w1]);
+        segs.forEach(function (seg) {
+          for (var w = seg[0]; w <= seg[1]; w++) {
+            if (lineParity === '单' && w % 2 === 0) continue;
+            if (lineParity === '双' && w % 2 === 1) continue;
+            if (weeks.indexOf(w) < 0) weeks.push(w);
+          }
+        });
+        for (var p = p0; p <= p1; p++) {
+          if (periods.indexOf(p) < 0) periods.push(p);
+        }
       } else if (weekText && ROOM_KW.test(ln)) {
         var rm = ROOM_RE.exec(ln);
         if (rm) { room = rm[1].trim(); campus = rm[2].trim(); }
@@ -1164,7 +1209,17 @@ for(var j=0;j<4;j++){if(i*8+j*6>binarray.length*32)str+=b64pad;else str+=tab.cha
         teacher = ln;
       }
     }
-    if (!weekText) periods = [rowBase];
+    if (!weekText) {
+      // 🔴 U97 兜底：周次一个字都没认出来时按**整学期**显示。app.js 那边是
+      //    `c.weeks.indexOf(week) < 0` 过滤，空数组等于这门课每一周都消失 ——
+      //    用户截图里周五那门课就是这样整门不见的。宁可多显示几周，也不能
+      //    整门漏掉；周次写法再怪，课也得在课表上。
+      periods = [rowBase];
+      for (var fw = 1; fw <= 20; fw++) weeks.push(fw);
+    } else {
+      weeks.sort(function (a, b) { return a - b; });
+      periods.sort(function (a, b) { return a - b; });
+    }
     return {
       name: name, code: code, teacher: teacher, room: room, campus: campus,
       weeks: weeks, parity: parity, periods: periods
@@ -1181,7 +1236,9 @@ for(var j=0;j<4;j++){if(i*8+j*6>binarray.length*32)str+=b64pad;else str+=tab.cha
     if (authFail(html)) { var e = new Error('登录已过期'); e.kind = 'auth'; throw e; }
     if (html.indexOf('课表') < 0 && html.indexOf('mytable') < 0) throw new Error('课表读取失败');
 
-    var tables = tablesOf(html);
+    // U97：课表格子里常有并列的 <div>（同一门课分两段周），要按块换行拆开；
+    // 其它表（成绩 / 选课清单）仍用原来的单行文本。
+    var tables = tablesOf(html, true);
     var grid = null;
     for (var t = 0; t < tables.length; t++) {
       var rows = tables[t];

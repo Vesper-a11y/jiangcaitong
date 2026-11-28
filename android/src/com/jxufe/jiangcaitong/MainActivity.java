@@ -44,7 +44,7 @@ public class MainActivity extends Activity {
      *    2026-11-23 起这个数字由打包脚本（sync_version）自动改写，
      *    不用再手工跟着改；但**不能删掉这段字符串**（正则找不到会判构建失败）。
      */
-    public static final String UA_TAG = " JiangCaiTong/1.0.2";
+    public static final String UA_TAG = " JiangCaiTong/1.0.3";
 
     private WebView web;
 

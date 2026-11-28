@@ -1810,33 +1810,4 @@ public class NativeBridge {
         return "没有这一项";
     }
 
-    /* ---- 快递取件码（2026-11-24 U78）----------------------------------
-     * 数据来自通知监听（DingListener → Parcels），这里只做「读本机缓存」。
-     * 全部同步返回：SharedPreferences 里就十几条，比走一次异步回调简单。
-     */
-    @JavascriptInterface
-    public String parcels() {
-        try { return Parcels.dump(web.getContext()); } catch (Throwable t) { return "[]"; }
-    }
-
-    @JavascriptInterface
-    public String parcelsPerm() {
-        try { return Parcels.hasPerm(web.getContext()) ? "1" : "0"; } catch (Throwable t) { return "0"; }
-    }
-
-    @JavascriptInterface
-    public void parcelsAsk() {
-        try { Parcels.ask(web.getContext()); } catch (Throwable ignored) { }
-    }
-
-    @JavascriptInterface
-    public void parcelsClear() {
-        try { Parcels.clear(web.getContext()); } catch (Throwable ignored) { }
-    }
-
-    /** 让监听服务立刻扫一遍通知栏里还挂着的通知（授权后第一次进页面用）。 */
-    @JavascriptInterface
-    public void parcelsScan() {
-        try { DingListener.scanNow(); } catch (Throwable ignored) { }
-    }
 }

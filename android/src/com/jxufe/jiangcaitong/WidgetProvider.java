@@ -12,6 +12,11 @@ import android.os.Bundle;
 import android.view.View;
 import android.widget.RemoteViews;
 
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.Locale;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -212,6 +217,10 @@ public class WidgetProvider extends AppWidgetProvider {
                 k.put("t", clip(r.optString("t"), 12));
                 k.put("c", clip(r.optString("c"), 12));
                 k.put("r", clip(r.optString("r"), 10));
+                // U95⑨：节次号（0-based，第 p+1 节），给小组件算「现在第几节 / 下节第几节」。
+                // 老版本推来的数据没有这两个字段 → optInt 默认 -1，画法会自动退回旧样式。
+                k.put("p0", r.optInt("p0", -1));
+                k.put("p1", r.optInt("p1", -1));
                 keep.put(k);
             } catch (Throwable ignored) {
                 // 这一行坏了就少显示一行，别整块空着。
@@ -222,6 +231,10 @@ public class WidgetProvider extends AppWidgetProvider {
             out.put("d", clip(o.optString("d"), 4));
             out.put("n", o.optInt("n", keep.length()));
             out.put("it", keep);
+            // U95⑨：推送那天的日期 + 今天星期索引。小组件刷新时 JS 不在跑，
+            // 靠它判断这份快照是不是今天的：隔天就只说「今天 N 节」，不说「现在第几节」。
+            out.put("ts", clip(o.optString("ts"), 10));
+            out.put("di", o.optInt("di", -1));
             // 🔴 0.49.0：任务进度。
             //    td 不许大于 tn —— 网页那边如果算错（比如把昨天的记成今天的），
             //    进度条会走出 100%，而 RemoteViews 对超范围的进度是**静默截断**，
@@ -290,11 +303,11 @@ public class WidgetProvider extends AppWidgetProvider {
 
     /** 把桌面上所有尺寸的这个小部件都重画一遍。
      *
-     * 🔴 四个尺寸是**四个 AppWidgetProvider**（系统按 receiver 认，一个类只能
-     *    挂一个 receiver）。只重画 WidgetProvider 的话，用户放在桌面上的
-     *    2×2 / 4×1 / 4×4 会一直停在旧数据上 —— 而且没有任何报错，
-     *    看起来只是「这个小尺寸好像不刷新」。
-     *    所以下面这张表就是「所有尺寸」的清单，加尺寸要同时加到这里。
+     * 🔴 2026-11-28：用户要「只留一个 2×2」，另外三个 receiver 已从 Manifest
+     *    删掉，系统不会再列出 4×2 / 4×1 / 4×4。但老用户桌面上可能还留着旧尺寸的
+     *    实例，系统仍会给它们发更新 —— 所以这里保留 WidgetProvider / WidgetStrip /
+     *    WidgetLarge 三个类，继续把它们一起重画，避免旧卡片永远停在旧数据上。
+     *    类还在、只是不注册，编译和运行都没问题；哪天确定没人用了再删类。
      */
     private static final Class<?>[] ALL = {
             WidgetProvider.class, WidgetSmall.class,
@@ -343,6 +356,7 @@ public class WidgetProvider extends AppWidgetProvider {
 
     private static RemoteViews build(Context c, int id, Class<?> cls) {
         int kind = kindOf(cls);
+
         // 三种画法三种布局。4×2 和 4×4 共用 jct_widget（行数按高度算），
         // 2×2 和 4×1 各有自己的布局（原因见那两份文件的注释）。
         int layout = kind == KIND_SMALL ? R.layout.jct_widget_small
@@ -537,12 +551,27 @@ public class WidgetProvider extends AppWidgetProvider {
             return rv;
         }
         boolean known = hasDay || n > 0;
-        rv.setTextViewText(R.id.hwBig, known ? (n > 0 ? (n + " 节") : "没课") : "—");
-        // 第二条提醒（作业 / 考试的最近一条）。2×2 的高度捉襟见肘，
-        // 所以它**和「下一节」挤同一格**（hwNext 本来就是两行）：
-        // 有下一节时写「16:30 形势与政策 / 作业 2 小时」，没课就只写提醒。
+        // U95⑨：中间大字说「现在第几节」，旧样式「N 节」只在数据不是今天时兜底。
+        // 大字那格 font 20sp、只能放一行，所以这里只放「正在上 / 下节 + 第X节」短词，
+        // 课名和时间放下面那行（hwNext 两行），别把大字撑成两行被裁掉。
+        Now now = nowState(o);
+        String big;
+        if (!now.mode.equals("stale")) {
+            big = now.mode.equals("live") ? "正在上"
+                    : now.mode.equals("next") ? "下节课" : "上完了";
+        } else {
+            big = known ? (n > 0 ? (n + " 节") : "没课") : "—";
+        }
+        rv.setTextViewText(R.id.hwBig, big);
+        // 下面这行：有当前节 / 下一节就写「第X节 时间 课名」；过期数据回退到第一节课。
+        // 作业 / 考试提醒仍挤这一格（hwNext 本来就是两行）。
         String line = "";
-        if (first == null) {
+        if (!now.mode.equals("stale") && !now.mode.equals("done")) {
+            String seg = now.p0 >= 0 ? ("第" + (now.p0 + 1) + "节 ") : "";
+            line = (seg + startOf(now.time) + " " + now.name).replaceAll("\\s+", " ").trim();
+        } else if (now.mode.equals("done")) {
+            line = "";
+        } else if (first == null) {
             line = known ? (n > 0 ? "" : "今天没课") : "";
         } else {
             String t = startOf(first.optString("t"));
@@ -567,7 +596,11 @@ public class WidgetProvider extends AppWidgetProvider {
         boolean hasDay = day.length() > 0;
 
         StringBuilder s = new StringBuilder();
-        if (!hasDay && n <= 0) {
+        // U95⑨：能算出当前节次就说「现在第几节 / 下节课」，一行里只放得下这些。
+        Now now = nowState(o);
+        if (!now.mode.equals("stale")) {
+            s.append(nowWord(now));
+        } else if (!hasDay && n <= 0) {
             s.append("打开酱菜通同步课表");
         } else {
             // 一周里只有这一行，所以信息可以密一点，但**不用全角空格分段**了：
@@ -579,11 +612,11 @@ public class WidgetProvider extends AppWidgetProvider {
                 s.append(" · ").append(startOf(first.optString("t")))
                         .append(" ").append(first.optString("c"));
             }
-            // 4×1 也想说一句「今晚有东西要交」——直接接在最后，
-            // 不再换行（这一份只有一行，换行等于看不见）。
-            String due = firstDueWord(o);
-            if (due.length() > 0) s.append(" · ").append(due);
         }
+        // 4×1 也想说一句「今晚有东西要交」——直接接在最后，
+        // 不再换行（这一份只有一行，换行等于看不见）。
+        String due = firstDueWord(o);
+        if (due.length() > 0) s.append(" · ").append(due);
         rv.setTextViewText(R.id.hwTitle, s.toString());
         return rv;
     }
@@ -596,6 +629,121 @@ public class WidgetProvider extends AppWidgetProvider {
         return v.trim();
     }
 
+    // ---- U95⑨：现在第几节 / 下节课是什么（2026-11-28）------------------
+    // 小组件刷新时 JS 不在跑，所以「当前时间落在哪一节」只能在这里用系统时间算。
+    // 网页推来的每段课带 p0/p1（0-based 节次）和 t（hh:mm~hh:mm），够用了。
+
+    /** `08:00` → 当天第几分钟；解析不了返回 -1（不是 0 —— 0 点会误判成「正在上」）。 */
+    private static int minOf(String hhmm) {
+        if (hhmm == null) return -1;
+        String v = hhmm.trim();
+        int i = v.indexOf(':');
+        if (i <= 0 || i != v.lastIndexOf(':')) return -1;
+        try {
+            int h = Integer.parseInt(v.substring(0, i));
+            int m = Integer.parseInt(v.substring(i + 1));
+            if (h < 0 || h > 23 || m < 0 || m > 59) return -1;
+            return h * 60 + m;
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /** 这段课的起止分钟 [start, end]；时间缺一段就返回 null（不算「正在上」）。 */
+    private static int[] spanOf(JSONObject seg) {
+        String t = seg.optString("t");
+        int i = t.indexOf('~');
+        if (i <= 0) return null;
+        int s = minOf(t.substring(0, i));
+        int e = minOf(t.substring(i + 1));
+        if (s < 0 || e < 0 || e < s) return null;
+        return new int[]{s, e};
+    }
+
+    /** 这份数据是不是今天的（隔天没同步就别再说「现在第几节」）。 */
+    private static boolean isToday(JSONObject o) {
+        String ts = o.optString("ts");
+        if (ts.length() < 10) return false;
+        try {
+            String today = new SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(new Date());
+            return ts.equals(today);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 当前节次的结果。`mode`: live=正在上 / next=下一节 / done=今天上完了 / stale=数据不是今天。 */
+    private static class Now {
+        String mode = "stale";
+        String name = "";       // 课名
+        String time = "";       // 起止或开始时间
+        int p0 = -1, p1 = -1;   // 0-based 节次
+    }
+
+    /**
+     * 按当前时刻算出「现在第几节 / 下节课」。只认今天推来的数据；时间段缺的段跳过。
+     *
+     * 🔴 课间也算「正在上」：一段连堂课 08:00~09:40 中间那 10 分钟人还在教室，
+     *    和网页 liveAt() 的口径一致 —— 两边对不上，桌面和 App 就会一个说上课一个说课间。
+     */
+    private static Now nowState(JSONObject o) {
+        Now r = new Now();
+        if (!isToday(o)) return r;
+        int di = o.optInt("di", -1);
+        int todayDi = (Calendar.getInstance().get(Calendar.DAY_OF_WEEK) + 5) % 7;
+        if (di < 0 || di != todayDi) return r;   // 星期都对不上，按过期处理
+        JSONArray it = o.optJSONArray("it");
+        if (it == null || it.length() == 0) { r.mode = "done"; return r; }
+        Calendar cal = Calendar.getInstance();
+        int nowMin = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
+
+        Now live = null, next = null;
+        for (int i = 0; i < it.length(); i++) {
+            JSONObject seg = it.optJSONObject(i);
+            if (seg == null) continue;
+            int[] sp = spanOf(seg);
+            if (sp == null) continue;
+            if (nowMin >= sp[0] && nowMin <= sp[1]) {
+                if (live == null) {
+                    live = new Now();
+                    live.mode = "live";
+                    live.name = seg.optString("c");
+                    live.time = seg.optString("t");
+                    live.p0 = seg.optInt("p0", -1);
+                    live.p1 = seg.optInt("p1", -1);
+                }
+            } else if (sp[0] > nowMin && next == null) {
+                next = new Now();
+                next.mode = "next";
+                next.name = seg.optString("c");
+                next.time = seg.optString("t");
+                next.p0 = seg.optInt("p0", -1);
+                next.p1 = seg.optInt("p1", -1);
+            }
+        }
+        if (live != null) return live;
+        if (next != null) return next;
+        r.mode = "done";
+        return r;
+    }
+
+    /** 把 Now 写成一句短话，给小尺寸用：「正在上 第3节 高数」/「下节 第4节 英语」。 */
+    private static String nowWord(Now n) {
+        if (n.mode.equals("live")) {
+            String seg = n.p0 >= 0 ? ("第" + (n.p0 + 1) + "节") : "";
+            return ("正在上 " + seg + " " + n.name).replaceAll("\\s+", " ").trim();
+        }
+        if (n.mode.equals("next")) {
+            String seg = n.p0 >= 0 ? ("第" + (n.p0 + 1) + "节") : "";
+            return ("下节 " + seg + " " + startOf(n.time) + " " + n.name)
+                    .replaceAll("\\s+", " ").trim();
+        }
+        if (n.mode.equals("done")) return "今天的课上完了";
+        return "";   // stale：不写「现在第几节」，回退到旧的「N 节」
+    }
+
+    /** 点卡片进 App 的课表页。**这一步不能省**：小组件只能显示，
+     *  真正的操作都在应用里，不给个入口等于把人堵在门口。 */
     private static PendingIntent open(Context c) {
         Intent it = new Intent(c, MainActivity.class);
         it.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP

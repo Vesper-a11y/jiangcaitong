@@ -1,10 +1,11 @@
 {
-  "versionName": "1.0.2",
-  "versionCode": 3,
-  "downloadUrl": "https://gitee.com/vesper-a11y/jiangcaitong/releases/download/v1.0.2/jiangcaitong-1.0.2.apk",
+  "versionName": "1.0.3",
+  "versionCode": 5,
+  "downloadUrl": "https://gitee.com/vesper-a11y/jiangcaitong/releases/download/v1.0.3/jiangcaitong-1.0.3.apk",
   "changelog": [
-    "修复：更新检查不再被版本号困住，以后能正常收到新版提醒",
-    "教务 / 学习通 / 住理 / 智慧江财，四大服务收进一个界面",
-    "只读不改、数据留本机，无广告"
+    "课表顶栏加入学习助手，问一句就能查课表、查电费；密钥只保存在本机",
+    "精简各处提示文字，界面更清爽",
+    "修复部分手机课表挤在一行、个别周次课程不显示的问题",
+    "开水结果按设备实际状态提示"
   ]
 }

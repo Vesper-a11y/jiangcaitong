@@ -95,8 +95,8 @@ CNB_APK_NAME = "酱菜通.apk"
 #    现在 sync_version() 会在打包前把这两处按这里的值重写（见那个函数的注释）。
 # CI（.github/workflows/release.yml）用环境变量从 tag 注入版本；本地打包用写死的值。
 # 🔴 versionCode 公式 = 主*10000 + 次*100 + 修订（tag v1.2.3 → 10203）。
-VERSION_NAME = os.environ.get("JCT_VERSION_NAME", "1.0.2")
-VERSION_CODE = int(os.environ.get("JCT_VERSION_CODE", "3"))
+VERSION_NAME = os.environ.get("JCT_VERSION_NAME", "1.0.3")
+VERSION_CODE = int(os.environ.get("JCT_VERSION_CODE", "5"))
 PKG = "com.jxufe.jiangcaitong"
 
 # 2026-11-01：`--debug` 让 APK 带 debuggable=true（aapt2 的 --debug-mode）。
