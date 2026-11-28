@@ -1,42 +1,41 @@
-name: Release
+name: Release（已停用自动触发）
 
 # ============================================================
-# 酱菜通自动发版：只在推送 v* 格式的 tag 时运行。
+# 🔴 2026-11-28：自动发版路线**暂不使用**，tag 自动触发已关掉。
+#    正式发版只走交接包 5.1 的手动路线（本地出包 → 重建快照 → 两边传附件）。
+#    保留本文件只为留档、以及以后想启用时改回来；现在只能在 Actions 页
+#    手动点「Run workflow」才会跑，推 v* tag 不会再自动打出包。
 #
-# 流程：checkout → Python + JDK17 → 补齐 Android SDK 组件 →
-#       从 tag 解析版本号 → python android/build_apk.py 打包签名 →
-#       生成 version.json → 创建 GitHub Release 并上传 APK + version.json。
+#    停用的四个原因（详见交接包 5.1）：
+#      1. 本文件生成的 version.json 用 updateLog 字符串，而 App 只认
+#         changelog / notes 数组（web/native.js:244）→ 用户点「检查更新」会看到空窗口；
+#      2. versionCode 用 主*10000+次*100+修订（v1.0.3 → 10003），
+#         与本地 build_apk.py 默认的 1.0.3=5 分叉，会让更新检查反复提示；
+#      3. generate_release_notes 会把提交标题拼进公开页，措辞不可控；
+#      4. Gitee 侧 Release 附件本来就不自动同步，两边流程仍得分开做。
 #
-# version.json 只在流水线里临时生成、随 Release 附件上传，
-# 不写回代码仓库（App 的更新检查读的是 Release 附件那份）。
+# 原流程说明（留档）：
+#   checkout → Python + JDK17 → 补齐 Android SDK 组件 →
+#   从 tag 解析版本号 → python android/build_apk.py 打包签名 →
+#   生成 version.json → 创建 GitHub Release 并上传 APK + version.json。
+#   version.json 只在流水线里临时生成、随 Release 附件上传，
+#   不写回代码仓库（App 的更新检查读的是 Release 附件那份）。
 #
-# 使用步骤（首次配置）：
-#   1. 仓库 Settings → Secrets and variables → Actions → New repository secret：
-#      - JCT_KEYSTORE_B64：签名 keystore 的 base64（不要带 certutil 的
-#        -----BEGIN----- 头尾；解码步骤会自动剥掉它们，多剥不伤）。
-#        Git Bash：base64 -w0 jiangcaitong.keystore
-#        PowerShell：[Convert]::ToBase64String([IO.File]::ReadAllBytes("jiangcaitong.keystore")) | Set-Content ks.b64
-#      - JCT_KS_PASS：keystore 口令（与本地打包用的一致）。
-#   2. 发版：本地打 tag 并推送 ——
-#        git tag v1.0.3 && git push origin v1.0.3
-#      跑完在 Releases 页就能看到 APK + version.json，Release Notes 自动生成。
+# 若以后要重新启用：先修上面 1、2 两处，把 on: 改回 push/tags 'v*'，
+# 补齐下面的 Secret，并同步交接包 5.1 的说明。
 #
-# 注意事项：
-#   - 签名：CI 用的密钥必须和本地一直在用的同一把，否则老用户无法覆盖安装
-#     （升级安装要求同签名）。脚本带 JCT_REQUIRE_KEYSTORE=1，Secret 没配会直接
-#     失败，绝不会现场生成一把新密钥装糊涂。
-#   - 工具链版本对齐：本项目不走 Gradle，android/build_apk.py 直接调
-#     build-tools 34.0.0（aapt2/d8/zipalign/apksigner）+ platforms android-33 +
-#     JDK 17。换 SDK 版本要三处一起改：这里、build_apk.py 顶部 BT/ANDROID_JAR、
-#     MIN_SDK/TARGET_SDK。
-#   - versionCode 公式 = 主*10000 + 次*100 + 修订（v1.2.3 → 10203），
-#     与 build_apk.py 顶部注释一致；必须递增，否则老包检测不到新版。
+# 首次配置 Secret（仅重新启用时需要）：
+#   Settings → Secrets and variables → Actions：
+#     - JCT_KEYSTORE_B64：签名 keystore 的 base64（不要带 PEM 头尾，解码步骤会剥）
+#     - JCT_KS_PASS：keystore 口令（与本地打包用的一致）
+#   签名密钥必须和本地一直在用的同一把，否则老用户无法覆盖安装；
+#   脚本带 JCT_REQUIRE_KEYSTORE=1，Secret 没配会直接失败，绝不现场生成新密钥。
+#   工具链：build-tools 34.0.0 + platforms android-33 + JDK 17，
+#   换版本要三处一起改：这里、build_apk.py 顶部 BT/ANDROID_JAR、MIN_SDK/TARGET_SDK。
 # ============================================================
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:        # 仅手动点触发；推 v* tag 不再自动发版
 
 permissions:
   contents: write          # 创建 Release / 上传附件需要的最小权限
